@@ -139,10 +139,10 @@ void SpeechService::stop()
 {
     m_testingAzure = false;
     m_current = nullptr;
-    for (SpeechEngine *e : {m_system, m_azure}) {
-        if (e->state() != SpeechEngine::State::Idle)
-            e->stop();
-    }
+    // Stop idle engines too: the system engine reports Idle once it gave up
+    // waiting for a slow backend that may still start speaking later.
+    for (SpeechEngine *e : {m_system, m_azure})
+        e->stop();
     updateFlags();
 }
 

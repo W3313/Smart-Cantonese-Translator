@@ -1,5 +1,6 @@
 #include "core/TranslationTypes.h"
 
+#include <QTimeZone>
 #include <QtTest>
 
 using namespace sct;
@@ -118,7 +119,7 @@ private slots:
         r.model = QStringLiteral("claude-opus-5-5");
         r.request.text = QStringLiteral("Where is he?");
         r.request.tone = Tone::Casual;
-        r.timestamp = QDateTime(QDate(2026, 10, 5), QTime(8, 30, 15, 123), Qt::UTC);
+        r.timestamp = QDateTime(QDate(2026, 10, 5), QTime(8, 30, 15, 123), QTimeZone::utc());
         r.fromCache = true;
 
         const QJsonObject json = r.toJson();
@@ -149,7 +150,7 @@ private slots:
         o.insert(QStringLiteral("translation"), QStringLiteral("x"));
         o.insert(QStringLiteral("timestamp"), QStringLiteral("2026-10-05T10:00:00+02:00"));
         const TranslationResult r = TranslationResult::fromJson(o);
-        QCOMPARE(r.timestamp, QDateTime(QDate(2026, 10, 5), QTime(8, 0), Qt::UTC));
+        QCOMPARE(r.timestamp, QDateTime(QDate(2026, 10, 5), QTime(8, 0), QTimeZone::utc()));
     }
 
     void metaTypes()

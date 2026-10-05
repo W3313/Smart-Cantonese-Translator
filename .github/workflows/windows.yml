@@ -101,9 +101,35 @@ jobs:
         run: cmake --build $env:BUILD_DIR --parallel
 
       - name: Test
+        id: test
         env:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir $env:BUILD_DIR --output-on-failure --timeout 300
+
+      # ctest shows nothing when a test crashes or hangs, so re-run each failed
+      # test with per-function logging to a file and print it with the exit code.
+      - name: Diagnose failed tests
+        if: failure() && steps.test.outcome == 'failure'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $failedLog = Join-Path $env:BUILD_DIR 'Testing\Temporary\LastTestsFailed.log'
+          if (-not (Test-Path $failedLog)) { Write-Host 'No LastTestsFailed.log'; exit 0 }
+          foreach ($line in Get-Content $failedLog) {
+            $name = ($line -split ':', 2)[1]
+            $exe = Get-ChildItem -Recurse -File -Filter "$name.exe" $env:BUILD_DIR | Select-Object -First 1
+            if (-not $exe) { Write-Host "Executable for $name not found"; continue }
+            $log = Join-Path $env:RUNNER_TEMP "$name.txt"
+            Write-Host "::group::$name"
+            $p = Start-Process -FilePath $exe.FullName -ArgumentList @('-o', "$log,txt", '-v1') `
+                   -WorkingDirectory $exe.DirectoryName -NoNewWindow -PassThru
+            $null = $p.Handle
+            if (-not $p.WaitForExit(240000)) { Write-Host 'Still running after 240 s - killing'; $p.Kill() }
+            else { Write-Host ('Exit code: 0x{0:X8}' -f $p.ExitCode) }
+            if (Test-Path $log) { Get-Content $log } else { Write-Host 'No log written' }
+            Write-Host '::endgroup::'
+          }
+          exit 1
 
       - name: Install & deploy Qt runtime (windeployqt)
         run: |

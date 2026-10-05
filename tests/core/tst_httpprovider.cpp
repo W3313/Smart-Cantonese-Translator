@@ -300,6 +300,17 @@ private slots:
         QCOMPARE(m_server->requests().size(), 1);  // timeouts are not retried
     }
 
+    void defaultTimeoutAllowsLongGenerations()
+    {
+        // The transfer timeout is an inactivity timeout and a non-streaming
+        // reply only arrives once generation is complete, so the default must
+        // cover a full max_tokens answer at high effort (SDKs use 10 minutes).
+        ClaudeProvider claude(m_nam.get());
+        OpenAIProvider openAi(m_nam.get());
+        QCOMPARE(claude.transferTimeout(), 10 * 60 * 1000);
+        QCOMPARE(openAi.transferTimeout(), 10 * 60 * 1000);
+    }
+
     void networkError()
     {
         // A port nobody listens on.

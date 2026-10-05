@@ -48,6 +48,10 @@ public:
     // pack). Does nothing while speaking. Emits voicesChanged().
     void refreshVoices();
 
+    // How long speak() waits for a backend that reports nothing at all before
+    // showing Idle again (it is still tracked if it starts later). Default 10 s.
+    void setNoResponseTimeout(int msecs) { m_noResponseMs = msecs; }
+
     // Backends in the order they are tried: winrt, sapi, speechd, flite, others.
     static QStringList orderBackends(const QStringList &available);
 
@@ -72,9 +76,13 @@ private:
     QList<Entry> m_entries;
     std::array<QString, 2> m_preferred;  // user-chosen voice names, indexed by Language
     double m_rate = 0.0;
+    int m_noResponseMs = 10000;
     State m_state = State::Idle;
     quint64 m_generation = 0;
     bool m_sawSpeaking = false;
+    // The start check gave up on the current text (state went Idle) but the
+    // backend may still start it late; it is then tracked again.
+    bool m_awaitingLateStart = false;
     bool m_stopping = false;
     QTimer *m_startCheck = nullptr;
 };

@@ -26,6 +26,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPlainTextEdit>
+#include <QScreen>
 #include <QShortcut>
 #include <QTimer>
 #include <QUrl>
@@ -48,6 +49,25 @@ QString shortProviderName(const QString &id)
     if (id == QLatin1String("openai"))
         return QStringLiteral("OpenAI");
     return id;
+}
+
+// First run: 1180 x 720, shrunk to fit small or highly scaled screens (a 1080p
+// laptop at 150 % has only about 1280 x 690 logical pixels) and centred, so
+// the Translate button is never below the bottom of the screen.
+void placeOnScreen(QWidget *window)
+{
+    QSize size(1180, 720);
+    const QScreen *screen = window->screen();
+    const QRect area = screen ? screen->availableGeometry() : QRect();
+    if (area.isValid()) {
+        // Leave room for the title bar and frame.
+        size = size.boundedTo(QSize(area.width() * 94 / 100, area.height() * 88 / 100))
+                   .expandedTo(window->minimumSize());
+        QRect r(QPoint(0, 0), size);
+        r.moveCenter(area.center());
+        window->move(qMax(area.left(), r.left()), qMax(area.top(), r.top() - 16));
+    }
+    window->resize(size);
 }
 
 QKeySequence keyTranslate() { return QKeySequence(Qt::CTRL | Qt::Key_Return); }
@@ -261,11 +281,11 @@ MainWindow::MainWindow(AppSettings *settings, TranslationService *translation, S
     if (m_settings) {
         m_direction = m_settings->direction();
         m_tone = m_settings->tone();
-        if (!restoreGeometry(m_settings->windowGeometry()))
-            resize(1180, 720);
-    } else {
-        resize(1180, 720);
     }
+    // restoreGeometry() also brings back a window saved on a monitor that is
+    // no longer connected.
+    if (!m_settings || !restoreGeometry(m_settings->windowGeometry()))
+        placeOnScreen(this);
     m_toneControl->setCurrentIndex(int(m_tone), false);
     applyDirection(m_direction, false);
     setHistoryVisible(UiPrefs::instance()->historyVisible(), false);
@@ -344,10 +364,13 @@ QWidget *MainWindow::buildHeader()
                                                "situations (唔該, 請問). Formal English the other way."));
     connect(m_toneControl, &ui::SegmentedControl::currentIndexChanged, this, [this](int index) {
         setTone(static_cast<Tone>(index));
-        // Re-translate the shown text in the new tone.
-        if (m_result->page() == ResultView::Page::Result && m_result->hasResult()
-            && m_result->result().request.text.trimmed() == m_input->text().trimmed()
-            && m_result->result().request.tone != m_tone)
+        // Re-translate in the new tone: a translation still running (its
+        // answer would be in the old tone), or the shown result.
+        if (isTranslating() && m_lastRequest.tone != m_tone && !m_input->text().trimmed().isEmpty())
+            translateNow();
+        else if (m_result->page() == ResultView::Page::Result && m_result->hasResult()
+                 && m_result->result().request.text.trimmed() == m_input->text().trimmed()
+                 && m_result->result().request.tone != m_tone)
             translateNow();
     });
     ch->addWidget(m_toneControl);
@@ -418,7 +441,13 @@ void MainWindow::buildShortcuts()
     });
     add(keyHistory(), [this] { setHistoryVisible(!isHistoryVisible()); });
     add(keySettings(), [this] { openSettings(SettingsDialog::Tab::AI); });
-    add(keyCopy(), [this] { m_result->copyTranslation(); });
+    add(keyCopy(), [this] {
+        // Only what is on screen (an error or loading page keeps the previous result).
+        if (m_result->page() == ResultView::Page::Result && m_result->hasResult())
+            m_result->copyTranslation();
+        else
+            showStatus(tr("Nothing to copy yet"));
+    });
     add(QKeySequence(Qt::CTRL | Qt::Key_F), [this] {
         setHistoryVisible(true);
         m_historyPanel->focusSearch();
@@ -461,15 +490,24 @@ void MainWindow::applyDirection(Direction direction, bool animated)
     m_result->setDirection(direction);
 }
 
+bool MainWindow::isTranslating() const { return m_translation && m_translation->isBusy(); }
+
 void MainWindow::setDirection(Direction direction)
 {
     if (direction == m_direction)
         return;
+    // A translation still running for the old direction would come back and
+    // flip the direction back: redo it for the new direction instead.
+    const bool redo = isTranslating() && !m_input->text().trimmed().isEmpty();
+    if (!redo && isTranslating())
+        m_translation->cancel();
     if (m_settings)
         m_settings->setDirection(direction);
     motion::crossFade(m_input, motion::kNormal);
     applyDirection(direction, true);
-    if (m_result->page() == ResultView::Page::Result && m_result->result().request.direction != direction)
+    if (redo)
+        translateNow();
+    else if (m_result->page() == ResultView::Page::Result && m_result->result().request.direction != direction)
         m_result->showEmpty();
 }
 
@@ -478,7 +516,10 @@ void MainWindow::swapDirection()
     const bool hasResult = m_result->page() == ResultView::Page::Result && m_result->hasResult()
                            && m_result->result().request.direction == m_direction;
     const QString moved = hasResult ? m_result->result().translation.trimmed() : QString();
-    if (m_translation && m_translation->isBusy())
+    // Re-translate the moved result, or the text still being translated for
+    // the old direction (its answer would otherwise flip the direction back).
+    const bool redo = !moved.isEmpty() || (isTranslating() && !m_input->text().trimmed().isEmpty());
+    if (!redo && isTranslating())
         m_translation->cancel();
     const Direction next = reversed(m_direction);
     if (m_settings)
@@ -488,12 +529,12 @@ void MainWindow::swapDirection()
     if (!moved.isEmpty())
         motion::crossFade(m_result, motion::kNormal);
     applyDirection(next, true);
-    if (!moved.isEmpty()) {
+    if (!moved.isEmpty())
         m_input->setText(moved);
+    if (redo)
         translateNow();
-    } else if (m_result->page() == ResultView::Page::Result || m_result->page() == ResultView::Page::Error) {
+    else if (m_result->page() == ResultView::Page::Result || m_result->page() == ResultView::Page::Error)
         m_result->showEmpty();
-    }
     m_input->focusEditor();
 }
 
@@ -668,9 +709,10 @@ void MainWindow::onVoiceUnavailable(Language lang)
 {
     if (lang == Language::Cantonese) {
         if (!m_voiceHintDismissed && m_voiceHint->isHidden()) {
-            QString help = SpeechService::cantoneseVoiceHelpText().toHtmlEscaped();
-            help.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
-            m_voiceHint->setText(help);
+            // Kept short so the cards still fit below it in a small window; the
+            // step-by-step help is under Settings > Speech.
+            m_voiceHint->setText(tr("Install the free Windows voice “Chinese (Traditional, Hong Kong SAR)”, or use "
+                                    "Azure neural voices. Speech settings shows you how."));
             m_voiceHint->animateIn(false);
         } else {
             showStatus(tr("No Cantonese voice is installed - see Settings › Speech"), QStringLiteral("warning"));
@@ -814,13 +856,26 @@ void MainWindow::showStatus(const QString &message, const QString &iconName)
 void MainWindow::updateLayoutForWidth()
 {
     const int panesWidth = width() - 40 - (isHistoryVisible() ? kHistoryWidth : 0);
-    m_panesLayout->setDirection(panesWidth < 700 ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    const bool stacked = panesWidth < 700;
+    m_panesLayout->setDirection(stacked ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    // Stacked cards share the height: smaller minimums keep them (and a banner
+    // above them) from being squeezed into each other in a short window.
+    m_input->setMinimumHeight(stacked ? 150 : 200);
+    m_result->setMinimumHeight(stacked ? 150 : 220);
 }
 
 void MainWindow::resizeEvent(QResizeEvent *event)
 {
     QMainWindow::resizeEvent(event);
     updateLayoutForWidth();
+}
+
+bool MainWindow::event(QEvent *event)
+{
+    // Moved to a monitor with another scale factor: re-render the logo.
+    if (ui::isScreenChangeEvent(event) && m_logo)
+        m_logo->setPixmap(ui::appLogo(28, devicePixelRatioF()));
+    return QMainWindow::event(event);
 }
 
 void MainWindow::showEvent(QShowEvent *event)

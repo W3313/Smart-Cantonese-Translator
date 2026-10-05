@@ -279,9 +279,14 @@ bool AzureSpeechEngine::ensurePlayer()
                 [this](QMediaPlayer::Error error, const QString &errorString) {
                     if (m_state != State::Speaking)
                         return;
-                    if (error == QMediaPlayer::FormatError && !m_playingKey.isEmpty())
-                        m_cache.remove(m_playingKey);  // corrupt download: fetch again next time
+                    // Corrupt download: fetch it again next time. Delete it only
+                    // after fail() released it - Windows cannot delete a file
+                    // the player still has open.
+                    const QString corruptKey =
+                        error == QMediaPlayer::FormatError ? m_playingKey : QString();
                     onPlayerError(errorString);
+                    if (!corruptKey.isEmpty())
+                        m_cache.remove(corruptKey);
                 });
     }
     // Follow the current default output (headphones plugged in, etc.).
@@ -318,11 +323,13 @@ void AzureSpeechEngine::onMediaStatusChanged(int status)
     case QMediaPlayer::EndOfMedia:
         setState(State::Idle);
         break;
-    case QMediaPlayer::InvalidMedia:
-        if (!m_playingKey.isEmpty())
-            m_cache.remove(m_playingKey);
+    case QMediaPlayer::InvalidMedia: {
+        const QString corruptKey = m_playingKey;
         fail(azure::FailureKind::Playback, tr("The downloaded audio could not be played."));
+        if (!corruptKey.isEmpty())
+            m_cache.remove(corruptKey);  // after fail() released the file (Windows)
         break;
+    }
     default:
         break;
     }

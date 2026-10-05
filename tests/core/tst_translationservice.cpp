@@ -240,6 +240,14 @@ private slots:
         m_service->translate(req(QStringLiteral("Where is he?")));
         QCOMPARE(m_fake->translateCalls, 3);
         m_fake->complete(QStringLiteral("佢喺邊度？"));
+
+        // So does quality: asking for "best" must not replay the earlier answer.
+        m_settings->setQuality(QStringLiteral("best"));
+        m_service->translate(req(QStringLiteral("Where is he?")));
+        QCOMPARE(m_fake->translateCalls, 4);
+        m_fake->complete(QStringLiteral("佢而家喺邊度呀？"));
+        QCOMPARE(finished.count(), 5);
+        QVERIFY(!finished.last().first().value<TranslationResult>().fromCache);
     }
 
     void cancelForwardsCancelled()

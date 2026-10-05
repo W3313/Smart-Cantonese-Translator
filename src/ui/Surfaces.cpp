@@ -25,6 +25,19 @@ constexpr qreal kCardRadius = 14.0;
 
 } // namespace
 
+bool isScreenChangeEvent(const QEvent *event)
+{
+    switch (event->type()) {
+    case QEvent::ScreenChangeInternal:
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
+    case QEvent::DevicePixelRatioChange:
+#endif
+        return true;
+    default:
+        return false;
+    }
+}
+
 QFrame *makeDivider(QWidget *parent)
 {
     auto *line = new QFrame(parent);
@@ -397,6 +410,13 @@ void Banner::changeEvent(QEvent *event)
         refreshIcon();
 }
 
+bool Banner::event(QEvent *event)
+{
+    if (isScreenChangeEvent(event))
+        refreshIcon();
+    return QFrame::event(event);
+}
+
 void Banner::setTitle(const QString &title)
 {
     m_title->setText(title);
@@ -745,6 +765,13 @@ void IconLabel::changeEvent(QEvent *event)
     QLabel::changeEvent(event);
     if (event->type() == QEvent::PaletteChange || event->type() == QEvent::StyleChange)
         refresh();
+}
+
+bool IconLabel::event(QEvent *event)
+{
+    if (isScreenChangeEvent(event))
+        refresh();
+    return QLabel::event(event);
 }
 
 void IconLabel::refresh() { setPixmap(iconPixmap(m_name, m_tone, m_size, devicePixelRatioF())); }

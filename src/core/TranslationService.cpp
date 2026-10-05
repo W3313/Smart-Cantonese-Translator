@@ -189,7 +189,11 @@ void TranslationService::setBusy(bool busy)
 
 QString TranslationService::fullCacheKey(const TranslationRequest &request) const
 {
-    return activeProviderId() + QLatin1Char('|') + activeModel() + QLatin1Char('|') + request.cacheKey();
+    // Quality is part of the key: switching to "best" to get a better
+    // translation of the same text must not replay the "fast" answer.
+    const QString quality = m_settings ? m_settings->quality() : ProviderDefaults::defaultQuality();
+    return activeProviderId() + QLatin1Char('|') + activeModel() + QLatin1Char('|') + quality + QLatin1Char('|')
+           + request.cacheKey();
 }
 
 void TranslationService::remember(const QString &key, const TranslationResult &result)

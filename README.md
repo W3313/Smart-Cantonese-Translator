@@ -96,8 +96,9 @@ the most natural Cantonese.
 
 ### Add the key to the app
 
-Open the app's **Settings**, choose your AI provider, paste the key, and click
-**OK**. Treat the key like a password. You can set a monthly spending limit in
+Click **Add API key** at the top right (or open **Settings → AI**), choose your
+AI provider, paste the key, click **Test connection** to check it, then click
+**Save**. Treat the key like a password. You can set a monthly spending limit in
 the Anthropic or OpenAI console.
 
 ## Getting a Cantonese voice
@@ -117,9 +118,9 @@ To hear translations read aloud, you need a Cantonese voice. There are two optio
 1. Open **Settings → Time & Language → Speech → Add voices**.
 2. Choose **Chinese (Traditional, Hong Kong SAR)**.
 
-Then restart Smart Cantonese Translator. Windows adds the Hong Kong voices
-*Microsoft Tracy* and *Microsoft Danny*. Choose one under the app's **Settings →
-Speech**.
+Windows adds the Hong Kong voices *Microsoft Tracy* and *Microsoft Danny*. In the
+app, open **Settings → Speech** and click **Check again** (or restart the app),
+then choose one under **Cantonese voice**.
 
 ### Option 2: Microsoft Azure neural voices (most natural)
 
@@ -132,23 +133,30 @@ about half a million characters per month at the time of writing.
    - **Pricing tier:** **Free F0**.
 3. When it's ready, open the resource and go to **Keys and Endpoint**. Copy
    **KEY 1** and the **Location/Region** (for example `eastasia`).
-4. In the app, open **Settings → Speech**, choose **Azure**, and paste the key
-   and region.
+4. In the app, open **Settings → Speech**, choose **Azure neural voices**, paste
+   the key under **Azure Speech** and pick the region. Click **Test voice** to
+   hear a sample, then **Save**.
 
 Good Cantonese voices include **zh-HK-HiuMaanNeural** (female),
 **zh-HK-WanLungNeural** (male) and **zh-HK-HiuGaaiNeural** (female).
 
 ## Keyboard shortcuts
 
-<!-- Filled in by the maintainers once the UI is final. -->
-
 | Action | Shortcut |
 |---|---|
-| Translate | *TBD* |
-| Swap direction | *TBD* |
-| Read translation aloud | *TBD* |
-| Copy translation | *TBD* |
-| Settings | *TBD* |
+| Translate | **Ctrl+Enter** |
+| Cancel the translation, or stop reading aloud | **Esc** |
+| Swap languages | **Ctrl+Shift+S** |
+| Listen to the translation | **Ctrl+R** |
+| Copy the translation | **Ctrl+Shift+C** |
+| Show / hide history | **Ctrl+H** |
+| Search history | **Ctrl+F** |
+| Go to the text box | **Ctrl+L** |
+| Settings | **Ctrl+,** |
+| List of shortcuts | **F1** |
+
+In the history list, use **↑ / ↓** to move, **Enter** to open a translation and
+**Delete** to remove it. **Esc** in the history panel closes it.
 
 ## Privacy
 
@@ -169,7 +177,8 @@ Good Cantonese voices include **zh-HK-HiuMaanNeural** (female),
 ## Troubleshooting
 
 - **No Cantonese voice in the list:** install the Hong Kong voice (see
-  [Getting a Cantonese voice](#getting-a-cantonese-voice)), then restart the app.
+  [Getting a Cantonese voice](#getting-a-cantonese-voice)), then click **Check
+  again** under **Settings → Speech**, or restart the app.
 - **"Invalid API key" or "401" errors:** copy the key again with no extra spaces,
   and check that your account has credit.
 - **Network or SSL errors at work or school:** a firewall or proxy may block

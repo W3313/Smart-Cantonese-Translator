@@ -77,6 +77,7 @@ public:
     SpeechController *speechController() const { return m_speechController; }
 
 protected:
+    bool event(QEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
     void showEvent(QShowEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
@@ -86,6 +87,7 @@ private:
     void buildShortcuts();
     void connectServices();
 
+    bool isTranslating() const;
     void applyDirection(Direction direction, bool animated);
     void updateProviderChip();
     void updateWelcomeBanner(bool animated);

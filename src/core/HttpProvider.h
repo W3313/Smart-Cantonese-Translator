@@ -87,7 +87,12 @@ public:
     // restores the provider's official endpoint.
     void setBaseUrl(const QUrl &url);
     QUrl baseUrl() const;
-    void setTransferTimeout(int msecs);  // default 120000
+    // Qt's transfer timeout is an inactivity timeout, and a non-streaming
+    // answer sends nothing until the model has finished generating (up to
+    // 16000 tokens, several minutes at high effort). The default therefore
+    // matches the official SDKs' 10 minutes; the user can cancel at any time.
+    void setTransferTimeout(int msecs);  // default 600000; 0 = none
+    int transferTimeout() const { return m_transferTimeoutMs; }
     // Delay before each automatic retry; the list length is the maximum number
     // of retries. Default {1000, 3000}.
     void setRetryDelays(const QList<int> &delaysMs);
@@ -136,7 +141,7 @@ private:
     QString m_model;
     QString m_quality;
     QUrl m_baseUrl;
-    int m_transferTimeoutMs = 120000;
+    int m_transferTimeoutMs = 600000;
     QList<int> m_retryDelaysMs{1000, 3000};
     int m_maxRetryAfterMs = 20000;
 

@@ -238,7 +238,7 @@ QLineEdit:focus, QComboBox:focus, QComboBox:on { border: 1px solid {accent}; }
 QLineEdit:disabled, QComboBox:disabled { color: {textDisabled}; background: {surfaceAlt}; }
 QComboBox QLineEdit { border: none; padding: 0px; background: transparent; min-height: 0px; }
 QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: center right; width: 26px; border: none; }
-QComboBox::down-arrow { image: url({chevronPath}); width: 12px; height: 12px; }
+QComboBox::down-arrow { image: url("{chevronPath}"); width: 12px; height: 12px; }
 QComboBox QAbstractItemView {
     background: {surface};
     color: {text};
@@ -542,6 +542,8 @@ QString Theme::styleSheet(const ThemeColors &c)
     };
     for (const auto &token : tokens)
         qss.replace(QLatin1Char('{') + token.first + QLatin1Char('}'), css(token.second));
+    // Quoted in the style sheet: the temp path contains the user name, and an
+    // unquoted url() breaks on e.g. C:/Users/O'Brien/AppData/Local/Temp/...
     qss.replace(QStringLiteral("{chevronPath}"), chevronImagePath(c));
     return qss;
 }

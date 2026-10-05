@@ -908,7 +908,8 @@ void SettingsDialog::accept()
 void SettingsDialog::keyPressEvent(QKeyEvent *event)
 {
     // Enter saves (the custom buttons are not QPushButton defaults).
-    if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) && event->modifiers() == Qt::NoModifier
+    if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)
+        && (event->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier
         && !qobject_cast<QPlainTextEdit *>(focusWidget())) {
         accept();
         return;
@@ -1068,7 +1069,7 @@ void SettingsDialog::updateFontPreview()
 void SettingsDialog::testProvider(const QString &providerId)
 {
     ProviderWidgets &w = m_providerWidgets[providerId];
-    if (!m_translation)
+    if (!m_translation || w.test->isBusy())  // already testing: don't send a second request
         return;
     const QString key = w.key->text().trimmed();
     if (key.isEmpty()) {

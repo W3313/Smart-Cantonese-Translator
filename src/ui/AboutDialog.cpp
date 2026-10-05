@@ -131,7 +131,7 @@ void showShortcutsDialog(QWidget *parent)
     v->addWidget(title);
 
     const QList<QPair<QString, QKeySequence>> rows = {
-        {QObject::tr("Translate"), QKeySequence(Qt::CTRL | Qt::Key_Return)},
+        {QObject::tr("Translate"), QKeySequence(Qt::CTRL | Qt::Key_Enter)},  // Return works too
         {QObject::tr("Cancel / stop reading aloud"), QKeySequence(Qt::Key_Escape)},
         {QObject::tr("Swap languages"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S)},
         {QObject::tr("Listen to the translation"), QKeySequence(Qt::CTRL | Qt::Key_R)},

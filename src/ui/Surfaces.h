@@ -138,6 +138,7 @@ signals:
 
 protected:
     void changeEvent(QEvent *event) override;
+    bool event(QEvent *event) override;
 
 private:
     void refreshIcon();
@@ -255,6 +256,7 @@ public:
 
 protected:
     void changeEvent(QEvent *event) override;
+    bool event(QEvent *event) override;
 
 private:
     void refresh();
@@ -266,5 +268,9 @@ private:
 
 // Thin horizontal rule.
 QFrame *makeDivider(QWidget *parent);
+
+// True for the events Qt sends when a widget moves to a monitor with another
+// scale factor: pixmaps rendered for the old device pixel ratio must be redone.
+bool isScreenChangeEvent(const QEvent *event);
 
 } // namespace sct::ui

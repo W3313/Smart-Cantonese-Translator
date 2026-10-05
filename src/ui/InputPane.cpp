@@ -105,7 +105,8 @@ InputPane::InputPane(QWidget *parent)
                               static_cast<ui::IconButton *>(m_speak)})
         addRevealWidget(b);
 
-    const QKeySequence translateKey(Qt::CTRL | Qt::Key_Return);
+    // Ctrl+Return and Ctrl+Enter both translate; Windows keyboards say "Enter".
+    const QKeySequence translateKey(Qt::CTRL | Qt::Key_Enter);
     m_translate = new ui::Button(tr("Translate"), ui::Button::Variant::Primary, this);
     m_translate->setObjectName(QStringLiteral("translateButton"));
     m_translate->setTrailingIcon(QStringLiteral("translate"));
@@ -169,7 +170,7 @@ void InputPane::setBusy(bool busy)
 {
     m_translate->setBusy(busy, tr("Cancel"));
     m_translate->setToolTip(busy ? ui::withShortcut(tr("Cancel translation"), QKeySequence(Qt::Key_Escape))
-                                 : ui::withShortcut(tr("Translate"), QKeySequence(Qt::CTRL | Qt::Key_Return)));
+                                 : ui::withShortcut(tr("Translate"), QKeySequence(Qt::CTRL | Qt::Key_Enter)));
     m_translate->setAccessibleName(busy ? tr("Cancel translation") : tr("Translate"));
 }
 

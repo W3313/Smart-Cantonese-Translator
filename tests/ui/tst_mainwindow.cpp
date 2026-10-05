@@ -29,6 +29,7 @@
 #include <QDir>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QScreen>
 #include <QStyleFactory>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -80,6 +81,7 @@ public:
     }
     void listModels(const QString &) override
     {
+        ++listCalls;
         QTimer::singleShot(0, this, [this] {
             emit modelsListed({QStringLiteral("claude-opus-5-5"), QStringLiteral("claude-sonnet-5-5")});
         });
@@ -107,6 +109,7 @@ public:
     QString modelId = QStringLiteral("claude-opus-5-5");
     bool busy = false;
     int translateCalls = 0;
+    int listCalls = 0;
     TranslationRequest last;
 };
 
@@ -214,7 +217,14 @@ private slots:
     void settingsDialogAppliesChanges();
     void settingsTestConnectionListsModels();
     void cantoneseVoiceHint();
+    void changingDirectionOrToneWhileTranslatingRedoesIt();
+    void enterActivatesFocusedButton();
+    void copyShortcutCopiesOnlyTheShownResult();
+    void firstRunWindowFitsOnScreen();
+    void shortWindowKeepsCardsApart();
+    void otherShortcutsAreWired();
     void animationsRunWithoutCrashing();
+    void closingMidAnimationIsSafe();
     void screenshots();
 };
 
@@ -530,6 +540,13 @@ void TestMainWindow::settingsTestConnectionListsModels()
     auto *model = dlg->findChild<QComboBox *>(QStringLiteral("claudeModel"));
     QVERIFY(model);
     QCOMPARE(model->count(), 2);
+    QCOMPARE(env.fake->listCalls, 1);
+
+    // A second click while "Testing…" does not send another request.
+    test->click();
+    test->click();
+    QCOMPARE(env.fake->listCalls, 2);
+    QTRY_VERIFY(!test->isBusy());
     dlg->reject();
 }
 
@@ -543,6 +560,201 @@ void TestMainWindow::cantoneseVoiceHint()
     env.window->resultView()->speakButton()->click();
     QVERIFY(env.window->voiceHintBanner()->isVisible());
     QVERIFY(!env.window->voiceHintBanner()->text().isEmpty());
+}
+
+// A translation still running when the direction or tone changes is redone
+// with the new setting: its late answer must not flip the direction back.
+void TestMainWindow::changingDirectionOrToneWhileTranslatingRedoesIt()
+{
+    Env env;
+    QVERIFY(env.show());
+    ResultView *view = env.window->resultView();
+
+    // Chinese typed with English -> Cantonese selected; "Switch languages" is
+    // clicked while the first request is still running.
+    env.window->setInputText(QStringLiteral("你食咗飯未呀？"));
+    env.window->translateNow();
+    QCOMPARE(env.fake->translateCalls, 1);
+    QVERIFY(env.fake->last.direction == Direction::EnglishToCantonese);
+    auto *hint = env.window->inputPane()->findChild<ui::Button *>(QStringLiteral("directionHintButton"));
+    QVERIFY(hint);
+    hint->click();
+    QVERIFY(env.window->direction() == Direction::CantoneseToEnglish);
+    QCOMPARE(env.fake->translateCalls, 2);
+    QVERIFY(env.fake->last.direction == Direction::CantoneseToEnglish);
+    QCOMPARE(view->page(), ResultView::Page::Loading);
+    TranslationResult r = sampleResult(Direction::CantoneseToEnglish);
+    r.request = env.fake->last;
+    env.fake->complete(r);
+    QVERIFY(env.window->direction() == Direction::CantoneseToEnglish);
+    QCOMPARE(view->translationText(), QStringLiteral("Have you eaten yet?"));
+
+    // Swap (Ctrl+Shift+S) while translating: redone in the new direction.
+    env.window->setInputText(QStringLiteral("Hello there"));
+    env.window->translateNow();
+    QCOMPARE(env.fake->translateCalls, 3);
+    QTest::keyClick(env.window->inputPane()->editor(), Qt::Key_S, Qt::ControlModifier | Qt::ShiftModifier);
+    QVERIFY(env.window->direction() == Direction::EnglishToCantonese);
+    QCOMPARE(env.fake->translateCalls, 4);
+    QVERIFY(env.fake->last.direction == Direction::EnglishToCantonese);
+    QCOMPARE(env.fake->last.text, QStringLiteral("Hello there"));
+    QCOMPARE(env.window->inputPane()->text(), QStringLiteral("Hello there"));
+    QCOMPARE(view->page(), ResultView::Page::Loading);
+
+    // Tone change while translating: redone in the new tone.
+    ui::SegmentedControl *tone = env.window->toneControl();
+    QTest::mouseClick(tone, Qt::LeftButton, Qt::NoModifier, tone->segmentRect(2).center());
+    QCOMPARE(env.fake->translateCalls, 5);
+    QVERIFY(env.fake->last.tone == Tone::Polite);
+    r = sampleResult();
+    r.request = env.fake->last;
+    env.fake->complete(r);
+    QVERIFY(env.window->direction() == Direction::EnglishToCantonese);
+    QVERIFY(view->result().request.tone == Tone::Polite);
+
+    // Nothing to redo when the text box was emptied: just cancelled.
+    env.window->setInputText(QStringLiteral("Good night"));
+    env.window->translateNow();
+    QCOMPARE(env.fake->translateCalls, 6);
+    env.window->setInputText(QString());
+    env.window->setDirection(Direction::CantoneseToEnglish);
+    QCOMPARE(env.fake->translateCalls, 6);
+    QVERIFY(!env.service->isBusy());
+    QVERIFY(view->page() != ResultView::Page::Loading);
+}
+
+// Enter on a focused button clicks it, like a QPushButton, instead of
+// running the dialog's default action (Save).
+void TestMainWindow::enterActivatesFocusedButton()
+{
+    Env env;
+    QVERIFY(env.show());
+    SettingsDialog *dlg = env.window->openSettings(SettingsDialog::Tab::Appearance);
+    QVERIFY(QTest::qWaitForWindowExposed(dlg));
+    auto *theme = dlg->findChild<ui::SegmentedControl *>(QStringLiteral("themeControl"));
+    QVERIFY(theme);
+    QTest::mouseClick(theme, Qt::LeftButton, Qt::NoModifier, theme->segmentRect(2).center());
+    QVERIFY(dlg->isDirty());
+    auto *cancel = dlg->findChild<ui::Button *>(QStringLiteral("cancelButton"));
+    QVERIFY(cancel);
+    cancel->setFocus(Qt::TabFocusReason);
+    QPointer<SettingsDialog> guard(dlg);
+    QTest::keyClick(cancel, Qt::Key_Return);
+    QTRY_VERIFY(guard.isNull());
+    QCOMPARE(env.settings->theme(), QStringLiteral("light"));  // cancelled, not saved
+
+    // On a toggle switch Enter still saves the dialog (like a check box).
+    dlg = env.window->openSettings(SettingsDialog::Tab::Translation);
+    QVERIFY(QTest::qWaitForWindowExposed(dlg));
+    auto *jyutping = dlg->findChild<ui::ToggleSwitch *>(QStringLiteral("showJyutping"));
+    QVERIFY(jyutping);
+    jyutping->click();
+    jyutping->setFocus(Qt::TabFocusReason);
+    guard = dlg;
+    QTest::keyClick(jyutping, Qt::Key_Enter, Qt::KeypadModifier);
+    QTRY_VERIFY(guard.isNull());
+    QVERIFY(!env.settings->showJyutping());
+
+    // Main window: Enter on the focused Translate button translates.
+    env.window->setInputText(QStringLiteral("Hello"));
+    ui::Button *translate = env.window->inputPane()->translateButton();
+    QVERIFY(translate->toolTip().contains(QStringLiteral("Enter")));
+    translate->setFocus(Qt::TabFocusReason);
+    QTest::keyClick(translate, Qt::Key_Return);
+    QCOMPARE(env.fake->translateCalls, 1);
+}
+
+void TestMainWindow::copyShortcutCopiesOnlyTheShownResult()
+{
+    Env env;
+    QVERIFY(env.show());
+    QPlainTextEdit *editor = env.window->inputPane()->editor();
+    QApplication::clipboard()->setText(QStringLiteral("unchanged"));
+    env.window->showResult(sampleResult());
+    TranslationError e;
+    e.kind = ErrorKind::Server;
+    env.window->showError(e);  // the previous result is no longer on screen
+    QTest::keyClick(editor, Qt::Key_C, Qt::ControlModifier | Qt::ShiftModifier);
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("unchanged"));
+    QVERIFY(ui::Toast::current(env.window.get()));
+    QCOMPARE(ui::Toast::current(env.window.get())->text(), QStringLiteral("Nothing to copy yet"));
+
+    env.window->showResult(sampleResult());
+    QTest::keyClick(editor, Qt::Key_C, Qt::ControlModifier | Qt::ShiftModifier);
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("好耐冇見！你最近點呀？"));
+}
+
+// Without a saved geometry the window must fit the screen (small laptops,
+// 150 % scaling), with the Translate button visible.
+void TestMainWindow::firstRunWindowFitsOnScreen()
+{
+    Env env;
+    MainWindow fresh(env.settings.get(), env.service.get(), env.speech.get());
+    const QRect area = fresh.screen()->availableGeometry();
+    QVERIFY(area.isValid());
+    QVERIFY2(fresh.width() <= qMax(area.width(), fresh.minimumWidth()),
+             qPrintable(QStringLiteral("%1 > %2").arg(fresh.width()).arg(area.width())));
+    QVERIFY2(fresh.height() <= qMax(area.height(), fresh.minimumHeight()),
+             qPrintable(QStringLiteral("%1 > %2").arg(fresh.height()).arg(area.height())));
+    if (area.width() >= 1400 && area.height() >= 900)
+        QCOMPARE(fresh.size(), QSize(1180, 720));  // the designed size where it fits
+}
+
+// Narrow and short window, history open (cards stacked) and the "no
+// Cantonese voice" banner shown: nothing may be squeezed into anything else.
+void TestMainWindow::shortWindowKeepsCardsApart()
+{
+    Env env;
+    env.window->resize(800, 560);
+    QVERIFY(env.show());
+    env.window->setHistoryVisible(true, false);
+    env.window->showResult(sampleResult());
+    emit env.window->speechController()->voiceUnavailable(Language::Cantonese);
+    QVERIFY(env.window->voiceHintBanner()->isVisible());
+    QTest::qWait(50);  // layouts settle
+
+    QWidget *central = env.window->centralWidget();
+    auto rectIn = [central](QWidget *w) { return QRect(w->mapTo(central, QPoint(0, 0)), w->size()); };
+    const QRect banner = rectIn(env.window->voiceHintBanner());
+    const QRect input = rectIn(env.window->inputPane());
+    const QRect result = rectIn(env.window->resultView());
+    QVERIFY2(input.bottom() < result.top(), "the stacked cards overlap");
+    QVERIFY2(banner.bottom() < input.top(), "the banner overlaps the cards");
+    QVERIFY(result.bottom() <= central->height());
+    QVERIFY(input.height() >= env.window->inputPane()->minimumHeight());
+}
+
+void TestMainWindow::otherShortcutsAreWired()
+{
+    Env env;
+    QVERIFY(env.show());
+    env.window->activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(env.window.get()));
+    QPlainTextEdit *editor = env.window->inputPane()->editor();
+
+    // Ctrl+R without a result explains what to do.
+    QTest::keyClick(editor, Qt::Key_R, Qt::ControlModifier);
+    QVERIFY(ui::Toast::current(env.window.get()));
+    QVERIFY(ui::Toast::current(env.window.get())->text().startsWith(QStringLiteral("Translate something first")));
+
+    // Ctrl+F opens history with the search box focused; Esc there closes it.
+    QTest::keyClick(editor, Qt::Key_F, Qt::ControlModifier);
+    QVERIFY(env.window->isHistoryVisible());
+    QLineEdit *search = env.window->historyPanel()->searchBox();
+    QTRY_VERIFY(search->hasFocus());
+    QTest::keyClick(search, Qt::Key_Escape);
+    QVERIFY(!env.window->isHistoryVisible());
+    QTRY_VERIFY(editor->hasFocus());
+
+    // Ctrl+, opens Settings on the AI page.
+    QTest::keyClick(editor, Qt::Key_Comma, Qt::ControlModifier);
+    auto *dlg = env.window->findChild<SettingsDialog *>();
+    QVERIFY(dlg);
+    QVERIFY(dlg->isVisible());
+    QCOMPARE(dlg->currentTab(), SettingsDialog::Tab::AI);
+    QPointer<SettingsDialog> guard(dlg);
+    dlg->reject();
+    QTRY_VERIFY(guard.isNull());
 }
 
 // Same flows with animations on: exercises the motion code paths (deferred
@@ -581,6 +793,43 @@ void TestMainWindow::animationsRunWithoutCrashing()
     QCOMPARE(env.window->historyPanel()->visibleCount(), 1);
     env.settings->setTheme(QStringLiteral("light"));
     QTest::qWait(400);
+    UiPrefs::instance()->setReduceMotion(true);
+}
+
+// Everything torn down while animations, toasts, overlays and a request are
+// still in flight (run under ASan to catch lifetime bugs).
+void TestMainWindow::closingMidAnimationIsSafe()
+{
+    {
+        Env env;
+        UiPrefs::instance()->setReduceMotion(false);
+        QVERIFY(env.show());
+        env.service->history()->add(sampleResult(Direction::CantoneseToEnglish));
+        env.service->history()->add(sampleResult());
+        env.window->setHistoryVisible(true);
+        env.window->setInputText(QStringLiteral("Long time no see!"));
+        for (int i = 0; i < 3; ++i)
+            env.window->translateNow();  // rapid re-translate
+        TranslationResult r = sampleResult();
+        r.request = env.fake->last;
+        env.fake->complete(r);
+        env.window->resultView()->alternativesSection()->setExpanded(true);
+        env.window->showStatus(QStringLiteral("Copied"), QStringLiteral("check"));
+        env.service->history()->remove(env.service->history()->entries().last().id);  // row collapses
+        SettingsDialog *dlg = env.window->openSettings(SettingsDialog::Tab::Appearance);
+        QVERIFY(QTest::qWaitForWindowExposed(dlg));
+        env.settings->setTheme(QStringLiteral("dark"));  // cross-fades the window and the dialog
+        dlg->reject();
+        env.window->setInputText(QStringLiteral("Another one"));
+        env.window->translateNow();
+        TranslationError e;
+        e.kind = ErrorKind::Network;
+        env.fake->fail(e.kind, QStringLiteral("offline"));  // error banner slides and shakes
+        QTest::mouseClick(env.window->directionPill(), Qt::LeftButton);
+        QTest::qWait(60);
+        env.window->close();  // mid-animation, translation running
+    }
+    Theme::apply(QStringLiteral("light"));
     UiPrefs::instance()->setReduceMotion(true);
 }
 

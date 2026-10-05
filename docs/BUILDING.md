@@ -54,8 +54,8 @@ Folder*) do this for you.
 ### Installer
 
 ```powershell
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=1.0.0 ^
-    /DStageDir=%CD%\dist\SmartCantoneseTranslator /DOutputDir=%CD%\dist ^
+& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=1.0.0 `
+    "/DStageDir=$PWD\dist\SmartCantoneseTranslator" "/DOutputDir=$PWD\dist" `
     packaging\windows\installer.iss
 ```
 

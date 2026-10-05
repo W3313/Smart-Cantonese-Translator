@@ -36,7 +36,11 @@ protected:
     void focusInEvent(QFocusEvent *event) override;
     void focusOutEvent(QFocusEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
     void changeEvent(QEvent *event) override;
+    // Enter/Return clicks the focused button, like a QPushButton in a dialog
+    // (otherwise the dialog's default action would run instead).
+    void setClickOnEnter(bool on) { m_clickOnEnter = on; }
 
 private:
     void animateHover(bool on);
@@ -45,6 +49,7 @@ private:
     qreal m_hover = 0.0;
     qreal m_press = 0.0;
     bool m_keyboardFocus = false;
+    bool m_clickOnEnter = true;
 };
 
 // Small ghost button with a tinted icon and optional text ("Copy").

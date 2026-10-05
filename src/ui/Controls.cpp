@@ -123,6 +123,18 @@ void ButtonBase::mousePressEvent(QMouseEvent *event)
     QAbstractButton::mousePressEvent(event);
 }
 
+void ButtonBase::keyPressEvent(QKeyEvent *event)
+{
+    if (m_clickOnEnter && (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)
+        && (event->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier) {
+        if (!event->isAutoRepeat())
+            click();
+        event->accept();
+        return;
+    }
+    QAbstractButton::keyPressEvent(event);
+}
+
 void ButtonBase::changeEvent(QEvent *event)
 {
     QAbstractButton::changeEvent(event);
@@ -418,6 +430,7 @@ void Button::paintEvent(QPaintEvent *)
 SegmentedControl::SegmentedControl(QWidget *parent)
     : ButtonBase(parent)
 {
+    setClickOnEnter(false);  // arrows select; Enter goes to the dialog
     setMouseTracking(true);
     setFont(Theme::uiFont(9.5, QFont::Medium));
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
@@ -633,6 +646,7 @@ bool SegmentedControl::event(QEvent *event)
 ToggleSwitch::ToggleSwitch(QWidget *parent)
     : ButtonBase(parent)
 {
+    setClickOnEnter(false);  // Space toggles; Enter goes to the dialog (like a check box)
     setCheckable(true);
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     connect(this, &QAbstractButton::toggled, this, [this](bool on) {

@@ -2,7 +2,9 @@
 
 #include "tts/SsmlBuilder.h"
 
+#include <QAudioDevice>
 #include <QLocale>
+#include <QMediaDevices>
 #include <QSet>
 #include <QSignalBlocker>
 #include <QTextToSpeech>
@@ -47,8 +49,10 @@ SystemSpeechEngine::SystemSpeechEngine(QObject *parent)
     m_startCheck->setSingleShot(true);
     m_startCheck->setInterval(StartCheckMs);
     connect(m_startCheck, &QTimer::timeout, this, [this] {
-        if (m_state == State::Loading && m_tts && m_tts->state() != QTextToSpeech::Speaking)
+        if (m_state == State::Loading && m_tts && m_tts->state() != QTextToSpeech::Speaking) {
+            m_awaitingLateStart = true;
             setState(State::Idle);
+        }
     });
 
     const QStringList order = orderBackends(QTextToSpeech::availableEngines());
@@ -258,6 +262,12 @@ void SystemSpeechEngine::speak(const QString &text, Language lang)
         setState(State::Idle);
         return;
     }
+    // The WinRT backend plays through Qt Multimedia and, without an output
+    // device, silently drops the text (no error, no state change).
+    if (m_backend == QLatin1String("winrt") && QMediaDevices::audioOutputs().isEmpty()) {
+        fail(tr("No audio output device was found. Connect speakers or headphones and try again."));
+        return;
+    }
     // Qt's SAPI backend sends the text as SAPI XML, so markup characters in
     // user text must be escaped. Other backends take plain text.
     if (m_backend == QLatin1String("sapi"))
@@ -282,6 +292,12 @@ void SystemSpeechEngine::speak(const QString &text, Language lang)
     if (m_tts->state() == QTextToSpeech::Speaking) {
         m_sawSpeaking = true;
         setState(State::Speaking);
+    } else {
+        // If the backend reports nothing at all, stop showing "Loading" after
+        // a while. Qt 6.8's WinRT backend never reports errors (its setError()
+        // returns early for every real error) and stays silent when its audio
+        // sink cannot start. A late start is still tracked (m_awaitingLateStart).
+        m_startCheck->start(m_noResponseMs);
     }
 }
 
@@ -295,7 +311,9 @@ void SystemSpeechEngine::stop()
 
 void SystemSpeechEngine::stopBackend()
 {
-    if (!m_tts || m_state == State::Idle)
+    const bool pending = m_awaitingLateStart;  // given up on, but it may still start
+    m_awaitingLateStart = false;
+    if (!m_tts || (m_state == State::Idle && !pending))
         return;
     // Signals emitted synchronously while stopping belong to the old text.
     m_stopping = true;
@@ -317,6 +335,15 @@ void SystemSpeechEngine::onTtsStateChanged(int ttsState)
     if (m_stopping)
         return;
     if (m_state == State::Idle) {
+        if ((s == QTextToSpeech::Speaking || s == QTextToSpeech::Paused) && m_awaitingLateStart) {
+            // Started after the start check gave up (e.g. a long text took a
+            // while to synthesize): track it again so it shows as speaking
+            // and stop() can stop it.
+            m_awaitingLateStart = false;
+            m_sawSpeaking = true;
+            setState(State::Speaking);
+            return;
+        }
         // Some backends finish initializing asynchronously.
         if (s == QTextToSpeech::Ready && m_entries.isEmpty()) {
             m_entries = enumerateVoices(m_tts);
@@ -336,7 +363,7 @@ void SystemSpeechEngine::onTtsStateChanged(int ttsState)
         if (m_sawSpeaking)
             setState(State::Idle);  // finished
         else
-            m_startCheck->start();  // stale "Ready" from stopping the previous text?
+            m_startCheck->start(StartCheckMs);  // stale "Ready" from stopping the previous text?
         break;
     case QTextToSpeech::Error:
         fail(m_tts->errorString().isEmpty() ? tr("The speech engine reported an error.")

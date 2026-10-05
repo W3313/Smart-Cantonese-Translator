@@ -28,7 +28,7 @@ public:
     ~TranslationService() override;
 
     // Starts a translation with the active provider. Serves from cache when an
-    // identical request (same text/direction/tone/script/provider/model) was
+    // identical request (same text/direction/tone/script/provider/model/quality) was
     // already answered this session. Empty/whitespace text is ignored.
     void translate(const TranslationRequest &request);
     void cancel();
