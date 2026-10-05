@@ -136,7 +136,7 @@ private slots:
         QCOMPARE(back.providerId, r.providerId);
         QCOMPARE(back.model, r.model);
         QCOMPARE(back.request.text, r.request.text);
-        QCOMPARE(back.request.tone, Tone::Casual);
+        QCOMPARE_ENUM(back.request.tone, Tone::Casual);
         QCOMPARE(back.timestamp, r.timestamp);
         QCOMPARE(back.timestamp.timeSpec(), Qt::UTC);
         QVERIFY(!back.fromCache);  // transient flag is not persisted

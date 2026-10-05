@@ -5,6 +5,7 @@
 #include <QNetworkRequest>
 #include <QTimer>
 
+#include <chrono>
 #include <utility>
 
 namespace sct {
@@ -377,8 +378,13 @@ void HttpProvider::sendAttempt(Operation *op)
     QNetworkRequest request(urlFor(op->call.path));
     for (const auto &header : std::as_const(op->call.headers))
         request.setRawHeader(header.first, header.second);
-    if (m_transferTimeoutMs > 0)
+    if (m_transferTimeoutMs > 0) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
+        request.setTransferTimeout(std::chrono::milliseconds(m_transferTimeoutMs));
+#else
         request.setTransferTimeout(m_transferTimeoutMs);
+#endif
+    }
 
     QNetworkReply *reply = nullptr;
     if (op->call.verb == "GET")

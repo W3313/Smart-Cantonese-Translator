@@ -60,8 +60,10 @@ private slots:
 
     void bracesInsideStrings()
     {
+        // Plain literal on purpose: moc (Qt 6.4) mis-parses raw strings containing \".
         const QString text = QStringLiteral(
-            R"(Answer: {"translation":"用 {} 括住 \"佢\"","jyutping":"","literal":"","alternatives":[],"notes":["Use } carefully"]} trailing)");
+            "Answer: {\"translation\":\"用 {} 括住 \\\"佢\\\"\",\"jyutping\":\"\",\"literal\":\"\","
+            "\"alternatives\":[],\"notes\":[\"Use } carefully\"]} trailing");
         const ParsedTranslation p = ResponseParser::parse(text, enToYue());
         QVERIFY2(p.ok, qPrintable(p.error.detail));
         QCOMPARE(p.result.translation, QStringLiteral("用 {} 括住 \"佢\""));
@@ -77,7 +79,7 @@ private slots:
         QTest::newRow("empty translation") << QStringLiteral(R"({"translation":"   ","jyutping":""})");
         QTest::newRow("translation not string") << QStringLiteral(R"({"translation":42})");
         QTest::newRow("array not object") << QStringLiteral(R"(["translation"])");
-        QTest::newRow("truncated") << QStringLiteral(R"({"translation":"佢喺邊度)");
+        QTest::newRow("truncated") << QStringLiteral("{\"translation\":\"佢喺邊度");
     }
 
     void failures()

@@ -7,7 +7,9 @@
 #include "core/ClaudeProvider.h"
 #include "core/OpenAIProvider.h"
 
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QNetworkProxy>
 #include <QtTest>
@@ -16,9 +18,42 @@ using namespace sct;
 
 namespace {
 
-const QByteArray kClaudeOk = QByteArray(R"({"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-5-5","content":[{"type":"text","text":"{\"translation\":\"佢喺邊度呀？\",\"jyutping\":\"keoi5 hai2 bin1 dou6 aa3?\",\"literal\":\"\",\"alternatives\":[],\"notes\":[]}"}],"stop_reason":"end_turn"})");
+// Built with QJsonObject: moc (Qt 6.4) mis-parses raw strings containing \".
+QByteArray claudeOk()
+{
+    QJsonObject text;
+    text.insert(QStringLiteral("type"), QStringLiteral("text"));
+    text.insert(QStringLiteral("text"),
+                QStringLiteral(R"({"translation":"佢喺邊度呀？","jyutping":"keoi5 hai2 bin1 dou6 aa3?","literal":"","alternatives":[],"notes":[]})"));
+    QJsonObject root;
+    root.insert(QStringLiteral("type"), QStringLiteral("message"));
+    root.insert(QStringLiteral("role"), QStringLiteral("assistant"));
+    root.insert(QStringLiteral("model"), QStringLiteral("claude-opus-5-5"));
+    root.insert(QStringLiteral("content"), QJsonArray{text});
+    root.insert(QStringLiteral("stop_reason"), QStringLiteral("end_turn"));
+    return QJsonDocument(root).toJson(QJsonDocument::Compact);
+}
 
-const QByteArray kOpenAiOk = QByteArray(R"({"id":"chatcmpl-1","object":"chat.completion","model":"gpt-6.1-sol","choices":[{"index":0,"message":{"role":"assistant","content":"{\"translation\":\"唔該晒\",\"jyutping\":\"m4 goi1 saai3\",\"literal\":\"\",\"alternatives\":[],\"notes\":[]}","refusal":null},"finish_reason":"stop"}]})");
+QByteArray openAiOk()
+{
+    QJsonObject message;
+    message.insert(QStringLiteral("role"), QStringLiteral("assistant"));
+    message.insert(QStringLiteral("content"),
+                   QStringLiteral(R"({"translation":"唔該晒","jyutping":"m4 goi1 saai3","literal":"","alternatives":[],"notes":[]})"));
+    message.insert(QStringLiteral("refusal"), QJsonValue::Null);
+    QJsonObject choice;
+    choice.insert(QStringLiteral("index"), 0);
+    choice.insert(QStringLiteral("message"), message);
+    choice.insert(QStringLiteral("finish_reason"), QStringLiteral("stop"));
+    QJsonObject root;
+    root.insert(QStringLiteral("object"), QStringLiteral("chat.completion"));
+    root.insert(QStringLiteral("model"), QStringLiteral("gpt-6.1-sol"));
+    root.insert(QStringLiteral("choices"), QJsonArray{choice});
+    return QJsonDocument(root).toJson(QJsonDocument::Compact);
+}
+
+const QByteArray kClaudeOk = claudeOk();
+const QByteArray kOpenAiOk = openAiOk();
 
 TranslationRequest sampleRequest(const QString &text = QStringLiteral("Where is he?"))
 {

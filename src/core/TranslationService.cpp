@@ -57,10 +57,14 @@ TranslationService::TranslationService(AppSettings *settings, QObject *parent)
 
 TranslationService::~TranslationService()
 {
-    // Providers are children and abort their requests silently on
-    // destruction; make sure nothing calls back into this half-destroyed object.
-    for (TranslationProvider *p : std::as_const(m_providers))
+    // Delete the providers (which abort their requests silently) before the
+    // network manager they use; nothing may call back into this object.
+    const QList<TranslationProvider *> providers = m_providers.values();
+    m_providers.clear();
+    for (TranslationProvider *p : providers) {
         p->disconnect(this);
+        delete p;
+    }
 }
 
 // ---- translation ------------------------------------------------------------

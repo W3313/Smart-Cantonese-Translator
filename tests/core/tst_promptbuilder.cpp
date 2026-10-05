@@ -89,7 +89,8 @@ private slots:
     {
         const QJsonObject schema = PromptBuilder::responseSchema();
         const QJsonObject props = schema.value(QStringLiteral("properties")).toObject();
-        QCOMPARE(QSet<QString>(props.keys().begin(), props.keys().end()),
+        const QStringList propKeys = props.keys();
+        QCOMPARE(QSet<QString>(propKeys.begin(), propKeys.end()),
                  (QSet<QString>{QStringLiteral("translation"), QStringLiteral("jyutping"), QStringLiteral("literal"),
                                 QStringLiteral("alternatives"), QStringLiteral("notes")}));
         for (const char *name : {"translation", "jyutping", "literal"})
@@ -97,8 +98,8 @@ private slots:
                      QStringLiteral("string"));
         const QJsonObject altItem =
             props.value(QStringLiteral("alternatives")).toObject().value(QStringLiteral("items")).toObject();
-        const QJsonObject altProps = altItem.value(QStringLiteral("properties")).toObject();
-        QCOMPARE(QSet<QString>(altProps.keys().begin(), altProps.keys().end()),
+        const QStringList altKeys = altItem.value(QStringLiteral("properties")).toObject().keys();
+        QCOMPARE(QSet<QString>(altKeys.begin(), altKeys.end()),
                  (QSet<QString>{QStringLiteral("text"), QStringLiteral("jyutping"), QStringLiteral("note")}));
         QCOMPARE(props.value(QStringLiteral("notes"))
                      .toObject()

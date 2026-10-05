@@ -45,14 +45,35 @@ bool hasHeader(const HttpHeaders &headers, const QByteArray &name)
     return false;
 }
 
-const char kModelJson[] =
-    R"({\"translation\":\"佢喺邊度呀？\",\"jyutping\":\"keoi5 hai2 bin1 dou6 aa3?\",\"literal\":\"\",\"alternatives\":[],\"notes\":[]})";
+// Note: moc in Qt 6.4 mis-parses raw string literals that contain \" or an
+// odd number of quotes, so nested JSON is built with QJsonObject and
+// truncated JSON uses ordinary string literals.
+const QString kModelJson = QStringLiteral(
+    R"({"translation":"佢喺邊度呀？","jyutping":"keoi5 hai2 bin1 dou6 aa3?","literal":"","alternatives":[],"notes":[]})");
 
-QByteArray messageResponse(const QString &contentArrayJson, const QString &stopReason = QStringLiteral("end_turn"))
+QJsonObject block(const QString &type, const QString &field, const QString &value)
 {
-    return QStringLiteral(R"({"id":"msg_01","type":"message","role":"assistant","model":"claude-opus-5-5","content":%1,"stop_reason":"%2","usage":{"input_tokens":10,"output_tokens":20}})")
-        .arg(contentArrayJson, stopReason)
-        .toUtf8();
+    QJsonObject b;
+    b.insert(QStringLiteral("type"), type);
+    b.insert(field, value);
+    return b;
+}
+
+QJsonObject textBlock(const QString &text)
+{
+    return block(QStringLiteral("text"), QStringLiteral("text"), text);
+}
+
+QByteArray messageResponse(const QJsonArray &content, const QString &stopReason = QStringLiteral("end_turn"))
+{
+    QJsonObject root;
+    root.insert(QStringLiteral("id"), QStringLiteral("msg_01"));
+    root.insert(QStringLiteral("type"), QStringLiteral("message"));
+    root.insert(QStringLiteral("role"), QStringLiteral("assistant"));
+    root.insert(QStringLiteral("model"), QStringLiteral("claude-opus-5-5"));
+    root.insert(QStringLiteral("content"), content);
+    root.insert(QStringLiteral("stop_reason"), stopReason);
+    return QJsonDocument(root).toJson(QJsonDocument::Compact);
 }
 
 HttpResult httpResult(int status, const QByteArray &body = QByteArray())
@@ -202,11 +223,16 @@ private slots:
     {
         // The JSON answer is split over two text blocks; a thinking block with
         // a decoy JSON object and a fallback block must be ignored.
-        const QString content = QStringLiteral(
-            R"([{"type":"thinking","thinking":"{\"translation\":\"WRONG\"}","signature":"abc"},)"
-            R"({"type":"fallback","from_model":"claude-opus-5-5","to_model":"claude-opus-5"},)"
-            R"({"type":"text","text":"{\"translation\":\"佢喺邊度呀？\",\"jyutping\":\"keoi5 hai2 "},)"
-            R"({"type":"text","text":"bin1 dou6 aa3?\",\"literal\":\"\",\"alternatives\":[],\"notes\":[]}"}])");
+        QJsonObject thinking = block(QStringLiteral("thinking"), QStringLiteral("thinking"),
+                                     QStringLiteral(R"({"translation":"WRONG"})"));
+        thinking.insert(QStringLiteral("signature"), QStringLiteral("abc"));
+        QJsonObject fallback;
+        fallback.insert(QStringLiteral("type"), QStringLiteral("fallback"));
+        fallback.insert(QStringLiteral("from_model"), QStringLiteral("claude-opus-5-5"));
+        fallback.insert(QStringLiteral("to_model"), QStringLiteral("claude-opus-5"));
+        const qsizetype split = kModelJson.indexOf(QStringLiteral("bin1"));
+        const QJsonArray content{thinking, fallback, textBlock(kModelJson.left(split)), textBlock(kModelJson.mid(split))};
+
         const ParsedTranslation p = ClaudeApi::parseMessagesResponse(messageResponse(content), sampleRequest());
         QVERIFY2(p.ok, qPrintable(p.error.detail));
         QCOMPARE(p.result.translation, QStringLiteral("佢喺邊度呀？"));
@@ -216,8 +242,8 @@ private slots:
 
     void parseSimple()
     {
-        const QString content = QStringLiteral(R"([{"type":"text","text":"%1"}])").arg(QString::fromUtf8(kModelJson));
-        const ParsedTranslation p = ClaudeApi::parseMessagesResponse(messageResponse(content), sampleRequest());
+        const ParsedTranslation p =
+            ClaudeApi::parseMessagesResponse(messageResponse(QJsonArray{textBlock(kModelJson)}), sampleRequest());
         QVERIFY2(p.ok, qPrintable(p.error.detail));
         QCOMPARE(p.result.translation, QStringLiteral("佢喺邊度呀？"));
     }
@@ -225,7 +251,7 @@ private slots:
     void parseRefusal()
     {
         const ParsedTranslation p = ClaudeApi::parseMessagesResponse(
-            messageResponse(QStringLiteral(R"([{"type":"text","text":"partial"}])"), QStringLiteral("refusal")),
+            messageResponse(QJsonArray{textBlock(QStringLiteral("partial"))}, QStringLiteral("refusal")),
             sampleRequest());
         QVERIFY(!p.ok);
         QCOMPARE(p.error.kind, ErrorKind::Refused);
@@ -234,8 +260,7 @@ private slots:
     void parseMaxTokens()
     {
         const ParsedTranslation p = ClaudeApi::parseMessagesResponse(
-            messageResponse(QStringLiteral(R"([{"type":"text","text":"{\"translation\":\"佢"}])"),
-                            QStringLiteral("max_tokens")),
+            messageResponse(QJsonArray{textBlock(QStringLiteral("{\"translation\":\"佢"))}, QStringLiteral("max_tokens")),
             sampleRequest());
         QVERIFY(!p.ok);
         QCOMPARE(p.error.kind, ErrorKind::BadResponse);
@@ -245,9 +270,9 @@ private slots:
     void parseGarbage()
     {
         QCOMPARE(ClaudeApi::parseMessagesResponse("<html>", sampleRequest()).error.kind, ErrorKind::BadResponse);
-        QCOMPARE(ClaudeApi::parseMessagesResponse(messageResponse(QStringLiteral("[]")), sampleRequest()).error.kind,
+        QCOMPARE(ClaudeApi::parseMessagesResponse(messageResponse(QJsonArray()), sampleRequest()).error.kind,
                  ErrorKind::BadResponse);
-        const QByteArray notJson = messageResponse(QStringLiteral(R"([{"type":"text","text":"Sorry, no."}])"));
+        const QByteArray notJson = messageResponse(QJsonArray{textBlock(QStringLiteral("Sorry, no."))});
         QCOMPARE(ClaudeApi::parseMessagesResponse(notJson, sampleRequest()).error.kind, ErrorKind::BadResponse);
     }
 
