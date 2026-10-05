@@ -13,10 +13,25 @@
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QCryptographicHash>
+#include <QDir>
+#include <QLocalServer>
+#include <QLocalSocket>
+#include <QNetworkProxyFactory>
 #include <QStyleFactory>
 #include <QTimer>
 
 #include <memory>
+
+#ifdef Q_OS_WIN
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <windows.h>
+#endif
 
 namespace {
 
@@ -42,6 +57,43 @@ sct::TranslationResult demoResult()
     r.request.script = sct::ChineseScript::Traditional;
     r.timestamp = QDateTime::currentDateTimeUtc();
     return r;
+}
+
+// One running instance per user and settings location: a second launch
+// brings the existing window to the front instead of opening another window
+// that would overwrite the same history file.
+QString instanceServerName(const QString &settingsScope)
+{
+    const QByteArray scope = (QDir::homePath() + QLatin1Char('|') + settingsScope).toUtf8();
+    const QByteArray hash = QCryptographicHash::hash(scope, QCryptographicHash::Sha1).toHex().left(16);
+    return QStringLiteral(SCT_APP_ID "-") + QString::fromLatin1(hash);
+}
+
+bool activateRunningInstance(const QString &serverName)
+{
+    QLocalSocket socket;
+    socket.connectToServer(serverName);
+    if (!socket.waitForConnected(500))
+        return false;
+#ifdef Q_OS_WIN
+    // Let the running instance take the foreground (Windows blocks focus
+    // stealing by background processes otherwise).
+    AllowSetForegroundWindow(ASFW_ANY);
+#endif
+    socket.write("activate\n");
+    socket.waitForBytesWritten(500);
+    socket.disconnectFromServer();
+    return true;
+}
+
+void bringToFront(QWidget *window)
+{
+    if (window->isMinimized())
+        window->showNormal();
+    else
+        window->show();
+    window->raise();
+    window->activateWindow();
 }
 
 } // namespace
@@ -76,6 +128,15 @@ int main(int argc, char *argv[])
     parser.addOption(demoOption);
     parser.process(app);
 
+    // Debug runs (--screenshot) may run alongside the real app.
+    const bool singleInstance = !parser.isSet(screenshotOption);
+    const QString serverName = instanceServerName(parser.value(settingsOption));
+    if (singleInstance && activateRunningInstance(serverName))
+        return 0;
+
+    // Honour the Windows / system proxy (corporate networks).
+    QNetworkProxyFactory::setUseSystemConfiguration(true);
+
     QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
     QApplication::setFont(sct::Theme::uiFont(10));
     QApplication::setWindowIcon(sct::ui::appIcon());
@@ -104,6 +165,21 @@ int main(int argc, char *argv[])
     }
 
     window.show();
+
+    QLocalServer instanceServer;
+    if (singleInstance) {
+        QLocalServer::removeServer(serverName);  // stale socket after a crash (Unix)
+        instanceServer.setSocketOptions(QLocalServer::UserAccessOption);
+        if (instanceServer.listen(serverName)) {
+            QObject::connect(&instanceServer, &QLocalServer::newConnection, &window, [&instanceServer, &window] {
+                while (QLocalSocket *client = instanceServer.nextPendingConnection()) {
+                    QObject::connect(client, &QLocalSocket::disconnected, client, &QObject::deleteLater);
+                    client->disconnectFromServer();
+                }
+                bringToFront(&window);
+            });
+        }
+    }
 
     if (parser.isSet(screenshotOption)) {
         const QString path = parser.value(screenshotOption);

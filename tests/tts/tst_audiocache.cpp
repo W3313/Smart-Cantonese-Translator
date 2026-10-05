@@ -75,6 +75,7 @@ private slots:
         QFile f(path);
         QVERIFY(f.open(QIODevice::ReadOnly));
         QCOMPARE(f.readAll(), QByteArrayLiteral("ID3fake-mp3"));
+        f.close();  // Windows cannot delete a file that is still open
         QCOMPARE(cache.fileCount(), 1);
         QCOMPARE(cache.totalBytes(), qint64(11));
 
