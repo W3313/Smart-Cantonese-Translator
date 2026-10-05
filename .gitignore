@@ -1,0 +1,15 @@
+# Build output
+/build*/
+/out/
+/dist/
+CMakeLists.txt.user*
+CMakeUserPresets.json
+.qtcreator/
+.vs/
+.vscode/
+*.user
+compile_commands.json
+
+# OS junk
+.DS_Store
+Thumbs.db
