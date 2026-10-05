@@ -115,6 +115,10 @@ struct TranslationError
     int httpStatus = 0;
 };
 
+// Registers the sct value types with Qt's meta-type system (needed for queued
+// signal connections). Idempotent; TranslationService calls it on construction.
+void registerMetaTypes();
+
 } // namespace sct
 
 Q_DECLARE_METATYPE(sct::TranslationRequest)

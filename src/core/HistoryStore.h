@@ -20,7 +20,7 @@ struct HistoryEntry
 };
 
 // Persistent translation history (JSON file). Newest entries first.
-// Starred entries are never evicted by the size limit.
+// Starred entries are never evicted by the size limit (the limit counts unstarred entries only).
 // Saves are atomic (QSaveFile) and happen automatically after each change.
 class HistoryStore : public QObject
 {

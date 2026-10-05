@@ -6,6 +6,8 @@
 #include <QObject>
 #include <QStringList>
 
+#include <functional>
+
 class QNetworkAccessManager;
 
 namespace sct {
@@ -49,6 +51,10 @@ public:
     HistoryStore *history() const { return m_history; }
     QNetworkAccessManager *networkManager() const { return m_nam; }
 
+    // Replaces the built-in provider that has the same id() (takes ownership)
+    // and applies the current settings to it. Intended for tests / fakes.
+    void setProvider(TranslationProvider *provider);
+
 public slots:
     void reloadSettings();
 
@@ -76,6 +82,15 @@ private:
     QStringList m_cacheOrder;  // LRU order, most recent last
     QString m_pendingCacheKey;
     bool m_busy = false;
+
+    void onProviderFinished(TranslationProvider *p, const TranslationResult &result);
+    void onProviderFailed(TranslationProvider *p, const TranslationError &error);
+    void cancelInFlight(bool silently);
+    void deliverLater(const std::function<void()> &fn);
+
+    TranslationRequest m_pendingRequest;
+    quint64 m_generation = 0;     // bumped by translate()/cancel(); drops stale queued deliveries
+    bool m_suppressCancelled = false;  // swallow Cancelled from superseded requests
 };
 
 } // namespace sct
