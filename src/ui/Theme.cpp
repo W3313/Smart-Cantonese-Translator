@@ -40,6 +40,12 @@ ThemeColors lightColors()
     c.scrollHandleHover = rgba(0, 0, 0, 96);
     c.tooltipBg = QColor(0x24, 0x28, 0x2F);
     c.tooltipText = QColor(0xF3, 0xF4, 0xF6);
+    c.segmentPill = QColor(0xFF, 0xFF, 0xFF);
+    c.switchOff = QColor(0xD3, 0xD7, 0xDE);
+    c.knob = QColor(0xFF, 0xFF, 0xFF);
+    c.shadow = QColor(16, 24, 40);
+    c.skeleton = QColor(0xEC, 0xEE, 0xF2);
+    c.skeletonShine = QColor(0xF8, 0xF9, 0xFB);
     c.infoBg = QColor(0xEA, 0xF2, 0xFD);
     c.infoBorder = QColor(0xC8, 0xDB, 0xF7);
     c.infoText = QColor(0x1E, 0x4F, 0x8F);
@@ -79,6 +85,12 @@ ThemeColors darkColors()
     c.scrollHandleHover = rgba(255, 255, 255, 88);
     c.tooltipBg = QColor(0x3A, 0x3D, 0x45);
     c.tooltipText = QColor(0xF0, 0xF1, 0xF3);
+    c.segmentPill = QColor(0x3A, 0x3D, 0x45);
+    c.switchOff = QColor(0x4A, 0x4E, 0x57);
+    c.knob = QColor(0xF4, 0xF5, 0xF7);
+    c.shadow = QColor(0, 0, 0);
+    c.skeleton = QColor(0x2A, 0x2D, 0x33);
+    c.skeletonShine = QColor(0x36, 0x39, 0x41);
     c.infoBg = QColor(0x1C, 0x27, 0x35);
     c.infoBorder = QColor(0x2C, 0x44, 0x66);
     c.infoText = QColor(0xA8, 0xC7, 0xF0);
@@ -612,6 +624,20 @@ void setStyleProperty(QWidget *w, const char *name, const QVariant &value)
 }
 
 QString hex(const QColor &c) { return c.name(QColor::HexRgb); }
+
+QColor mix(const QColor &a, const QColor &b, qreal t)
+{
+    t = qBound(0.0, t, 1.0);
+    return QColor::fromRgbF(a.redF() + (b.redF() - a.redF()) * t, a.greenF() + (b.greenF() - a.greenF()) * t,
+                            a.blueF() + (b.blueF() - a.blueF()) * t, a.alphaF() + (b.alphaF() - a.alphaF()) * t);
+}
+
+QColor withAlpha(const QColor &c, qreal factor)
+{
+    QColor r = c;
+    r.setAlphaF(qBound(0.0, c.alphaF() * factor, 1.0));
+    return r;
+}
 
 } // namespace ui
 

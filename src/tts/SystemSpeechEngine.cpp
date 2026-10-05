@@ -190,7 +190,12 @@ QString SystemSpeechEngine::displayName() const
 
 bool SystemSpeechEngine::isAvailable() const
 {
-    return m_tts && m_tts->state() != QTextToSpeech::Error;
+    // A backend stays in the Error state after a runtime failure (e.g. no
+    // audio device) but recovers on the next say(); only a failed
+    // initialization makes it unusable.
+    return m_tts
+           && !(m_tts->state() == QTextToSpeech::Error
+                && m_tts->errorReason() == QTextToSpeech::ErrorReason::Initialization);
 }
 
 bool SystemSpeechEngine::hasVoiceFor(Language lang) const
@@ -265,10 +270,11 @@ void SystemSpeechEngine::speak(const QString &text, Language lang)
     setState(State::Loading);
     if (generation != m_generation)
         return;
+    const bool errorBefore = m_tts->state() == QTextToSpeech::Error;  // left over from last time
     m_tts->say(spoken);
     if (generation != m_generation)
-        return;
-    if (m_tts->state() == QTextToSpeech::Error) {
+        return;  // a synchronous errorOccurred() was already handled
+    if (m_tts->state() == QTextToSpeech::Error && !errorBefore) {
         fail(m_tts->errorString().isEmpty() ? tr("The speech engine could not read this text.")
                                             : m_tts->errorString());
         return;

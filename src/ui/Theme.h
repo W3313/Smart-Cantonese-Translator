@@ -39,6 +39,12 @@ struct ThemeColors
     QColor scrollHandleHover;
     QColor tooltipBg;
     QColor tooltipText;
+    QColor segmentPill;    // sliding highlight in segmented controls
+    QColor switchOff;      // toggle switch track when off
+    QColor knob;           // toggle switch knob
+    QColor shadow;         // base colour for painted card shadows
+    QColor skeleton;       // loading placeholder bars
+    QColor skeletonShine;  // sweeping highlight over them
 
     QColor infoBg, infoBorder, infoText;
     QColor warnBg, warnBorder, warnText;
@@ -104,6 +110,12 @@ void setStyleProperty(QWidget *w, const char *name, const QVariant &value);
 
 // Hex colour without alpha, e.g. "#1d2129".
 QString hex(const QColor &c);
+
+// Linear interpolation between two colours (including alpha); t in 0..1.
+QColor mix(const QColor &a, const QColor &b, qreal t);
+
+// Same colour with its alpha multiplied by factor.
+QColor withAlpha(const QColor &c, qreal factor);
 
 } // namespace ui
 

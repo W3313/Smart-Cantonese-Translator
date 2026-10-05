@@ -26,7 +26,7 @@ class FakeAzureServer : public QTcpServer
 public:
     int status = 200;
     QByteArray contentType = "audio/mpeg";
-    QByteArray body = QByteArray("ID3\x03\x00\x00\x00\x00\x00\x00", 10) + "fake-mp3-payload";
+    QByteArray body = silentMp3();
     bool hang = false;  // accept the request but never answer
     QList<FakeRequest> requests;
 
@@ -37,6 +37,18 @@ public:
             while (QTcpSocket *socket = nextPendingConnection())
                 handle(socket);
         });
+    }
+
+    // ~0.25 s of valid, silent MPEG-1 Layer III audio (128 kbit/s, 44.1 kHz,
+    // mono): frame header FF FB 90 C4 followed by zeroed side info / data.
+    static QByteArray silentMp3()
+    {
+        QByteArray frame(417, '\0');
+        frame[0] = '\xFF';
+        frame[1] = '\xFB';
+        frame[2] = '\x90';
+        frame[3] = '\xC4';
+        return frame.repeated(10);
     }
 
     QUrl url() const

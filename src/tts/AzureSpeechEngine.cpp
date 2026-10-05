@@ -206,12 +206,22 @@ void AzureSpeechEngine::start(const Job &job)
         m_reply = nullptr;
 
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        const QByteArray data = reply->readAll();
+        const bool ok = reply->error() == QNetworkReply::NoError && status >= 200 && status < 300;
+        const QByteArray data = ok ? reply->readAll() : QByteArray();
         azure::Failure failure;
-        if (reply->error() == QNetworkReply::NoError && status >= 200 && status < 300) {
-            if (data.isEmpty())
+        if (ok) {
+            const QString contentType =
+                reply->header(QNetworkRequest::ContentTypeHeader).toString().trimmed();
+            if (data.isEmpty()) {
                 failure = {azure::FailureKind::Server,
                            tr("Azure Speech returned no audio. Please try again.")};
+            } else if (!contentType.isEmpty()
+                       && !contentType.startsWith(QLatin1String("audio/"), Qt::CaseInsensitive)) {
+                // e.g. a Wi-Fi sign-in page answering instead of Azure
+                failure = {azure::FailureKind::Network,
+                           tr("Azure Speech returned an unexpected response instead of audio. "
+                              "Check your internet connection (a Wi-Fi sign-in page?).")};
+            }
         } else {
             failure = azure::describeFailure(status, reply->error(), region, reply->errorString());
             if (failure.kind == azure::FailureKind::None)

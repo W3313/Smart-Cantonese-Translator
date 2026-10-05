@@ -26,6 +26,11 @@ bool noSystemBackend()
     return QTextToSpeech::availableEngines().isEmpty();
 }
 
+bool systemHasVoice(const SpeechService &service, Language lang)
+{
+    return !service.voices(QStringLiteral("system"), lang).isEmpty();
+}
+
 } // namespace
 
 class TestSpeechService : public QObject
@@ -54,6 +59,10 @@ private slots:
     void initTestCase()
     {
         QNetworkProxy::setApplicationProxy(QNetworkProxy::NoProxy);
+        // Qt 6.4's GStreamer backend can crash on CI machines with an audio
+        // device but incomplete GStreamer plugins; FFmpeg is Qt 6.5+'s default.
+        if (qEnvironmentVariableIsEmpty("QT_MEDIA_BACKEND"))
+            qputenv("QT_MEDIA_BACKEND", "ffmpeg");
     }
 
     void init()
@@ -88,12 +97,14 @@ private slots:
         QCOMPARE(azure->cacheDirectory(),
                  QDir(m_settings->dataDirectory()).filePath(QStringLiteral("audio-cache")));
 
-        if (!noSystemBackend())
-            QSKIP("A system TTS backend is installed; the no-backend checks do not apply.");
-        QVERIFY(!service.canSpeak(Language::Cantonese));
-        QVERIFY(!service.canSpeak(Language::English));
-        QVERIFY(service.voices(QStringLiteral("system"), Language::English).isEmpty());
-        service.refreshVoices();  // must not crash without a backend
+        service.refreshVoices();  // must not crash, with or without a backend
+        // Without a Cantonese system voice and without Azure, Cantonese cannot be read.
+        QCOMPARE(service.canSpeak(Language::Cantonese), systemHasVoice(service, Language::Cantonese));
+        QCOMPARE(service.canSpeak(Language::English), systemHasVoice(service, Language::English));
+        if (noSystemBackend()) {
+            QVERIFY(!service.canSpeak(Language::Cantonese));
+            QVERIFY(!service.canSpeak(Language::English));
+        }
     }
 
     void nullSettingsAreTolerated()
@@ -105,26 +116,30 @@ private slots:
 
     void speakWithoutVoiceReportsHelp()
     {
-        if (!noSystemBackend())
-            QSKIP("Needs a machine without a system TTS backend.");
         SpeechService service(m_settings.get(), nullptr);
+        if (systemHasVoice(service, Language::Cantonese))
+            QSKIP("A Cantonese system voice is installed.");
         QSignalSpy errors(&service, &SpeechService::errorOccurred);
         QSignalSpy speaking(&service, &SpeechService::speakingChanged);
 
+        // Never falls back to a Mandarin / English voice: explains how to get one.
         service.speak(QStringLiteral("你好"), Language::Cantonese);
         QCOMPARE(errors.size(), 1);
         QCOMPARE(errors.takeFirst().first().toString(), SpeechService::cantoneseVoiceHelpText());
         QVERIFY(!service.isSpeaking());
-
-        service.speak(QStringLiteral("Hello"), Language::English);
-        QCOMPARE(errors.size(), 1);
-        QVERIFY(!errors.takeFirst().first().toString().isEmpty());
 
         service.speak(QStringLiteral("   "), Language::English);  // nothing to read
         QCOMPARE(errors.size(), 0);
         QCOMPARE(speaking.size(), 0);  // never started
         service.stop();
         QCOMPARE(speaking.size(), 0);
+
+        if (noSystemBackend()) {
+            service.speak(QStringLiteral("Hello"), Language::English);
+            QCOMPARE(errors.size(), 1);
+            QVERIFY(!errors.takeFirst().first().toString().isEmpty());
+            QCOMPARE(speaking.size(), 0);
+        }
     }
 
     void azureSettingsAreApplied()
@@ -146,9 +161,9 @@ private slots:
 
     void azureUsedWhenSystemLacksCantonese()
     {
-        if (!noSystemBackend())
-            QSKIP("Needs a machine without a system TTS backend.");
         SpeechService service(m_settings.get(), nullptr);
+        if (systemHasVoice(service, Language::Cantonese))
+            QSKIP("A Cantonese system voice is installed.");
         configureAzure(QStringLiteral("system"));
         // Windows voices are selected, but there is no Cantonese one: use Azure.
         QCOMPARE(service.effectiveEngineId(Language::Cantonese), QStringLiteral("azure"));
@@ -157,10 +172,10 @@ private slots:
 
     void azureFailureWithoutSystemVoiceIsAnError()
     {
-        if (!noSystemBackend())
-            QSKIP("Needs a machine without a system TTS backend (otherwise it falls back).");
         configureAzure();
         SpeechService service(m_settings.get(), nullptr);
+        if (systemHasVoice(service, Language::Cantonese))
+            QSKIP("A Cantonese system voice is installed (Azure failures fall back to it).");
         azureOf(service)->setEndpointOverride(FakeAzureServer::deadUrl());
 
         QSignalSpy errors(&service, &SpeechService::errorOccurred);
@@ -180,6 +195,39 @@ private slots:
         QCOMPARE(speaking.at(0).first().toBool(), true);
         QCOMPARE(speaking.at(1).first().toBool(), false);
         QCOMPARE(loading.size(), 2);
+    }
+
+    void azureFailureFallsBackToSystemVoice()
+    {
+        configureAzure();
+        SpeechService service(m_settings.get(), nullptr);
+        if (service.voices(QStringLiteral("system"), Language::English).isEmpty())
+            QSKIP("Needs a system TTS backend with an English voice.");
+        azureOf(service)->setEndpointOverride(FakeAzureServer::deadUrl());
+
+        QSignalSpy notices(&service, &SpeechService::notice);
+        QSignalSpy speaking(&service, &SpeechService::speakingChanged);
+        service.speak(QStringLiteral("Hello there"), Language::English);
+        QVERIFY(notices.wait(WaitMs));
+        QVERIFY(notices.first().first().toString().startsWith(QStringLiteral("Azure voice unavailable")));
+        // The system voice took over (it may still fail later, e.g. without an audio device).
+        QTRY_VERIFY_WITH_TIMEOUT(!service.isSpeaking(), WaitMs);
+        QCOMPARE(speaking.first().first().toBool(), true);
+        QCOMPARE(speaking.last().first().toBool(), false);
+    }
+
+    void systemVoiceStaysUsableAfterRuntimeError()
+    {
+        SpeechService service(m_settings.get(), nullptr);
+        if (!systemHasVoice(service, Language::English))
+            QSKIP("Needs a system TTS backend with an English voice.");
+        // Without an audio device each attempt fails at playback; with one it
+        // succeeds. Either way the engine must not become "unavailable".
+        for (int i = 0; i < 2; ++i) {
+            service.speak(QStringLiteral("Testing %1").arg(i), Language::English);
+            QTRY_VERIFY_WITH_TIMEOUT(!service.isSpeaking(), WaitMs);
+            QVERIFY(service.canSpeak(Language::English));
+        }
     }
 
     void azureDownloadAndCache()
@@ -228,9 +276,9 @@ private slots:
         FakeAzureServer server;
         server.hang = true;
         configureAzure();
-        auto *service = new SpeechService(m_settings.get(), nullptr);
+        auto service = std::make_unique<SpeechService>(m_settings.get(), nullptr);
         azureOf(*service)->setEndpointOverride(server.url());
-        QSignalSpy errors(service, &SpeechService::errorOccurred);
+        QSignalSpy errors(service.get(), &SpeechService::errorOccurred);
 
         service->speak(QStringLiteral("Hello"), Language::English);
         QVERIFY(service->isLoading());
@@ -242,7 +290,7 @@ private slots:
 
         service->speak(QStringLiteral("Hello again"), Language::English);
         QTRY_COMPARE_WITH_TIMEOUT(server.requests.size(), 2, WaitMs);
-        delete service;  // with a request in flight
+        service.reset();  // with a request in flight
         QTest::qWait(50);
     }
 

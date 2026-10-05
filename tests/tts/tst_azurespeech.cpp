@@ -36,6 +36,10 @@ private slots:
     void initTestCase()
     {
         QNetworkProxy::setApplicationProxy(QNetworkProxy::NoProxy);
+        // Qt 6.4's GStreamer backend can crash on CI machines with an audio
+        // device but incomplete GStreamer plugins; FFmpeg is Qt 6.5+'s default.
+        if (qEnvironmentVariableIsEmpty("QT_MEDIA_BACKEND"))
+            qputenv("QT_MEDIA_BACKEND", "ffmpeg");
     }
 
     // ---- pure helpers ----------------------------------------------------
@@ -282,6 +286,24 @@ private slots:
         QCOMPARE(e.lastFailure().kind, kind);
         QCOMPARE(errors.first().first().toString(), e.lastFailure().message);
         QCOMPARE(e.state(), SpeechEngine::State::Idle);
+        QCOMPARE(e.cache().fileCount(), 0);
+    }
+
+    void nonAudioResponseIsRejected()
+    {
+        FakeAzureServer server;  // e.g. a captive portal answering 200 with HTML
+        server.contentType = "text/html";
+        server.body = "<html>Please sign in</html>";
+        QTemporaryDir tmp;
+        QNetworkAccessManager nam;
+        AzureSpeechEngine e(&nam);
+        e.setCredentials(QStringLiteral("k"), QStringLiteral("eastasia"));
+        e.setEndpointOverride(server.url());
+        e.setCacheDirectory(tmp.path());
+        QSignalSpy errors(&e, &SpeechEngine::errorOccurred);
+        e.speak(QStringLiteral("Hello"), Language::English);
+        QVERIFY(errors.wait(WaitMs));
+        QCOMPARE(e.lastFailure().kind, FailureKind::Network);
         QCOMPARE(e.cache().fileCount(), 0);
     }
 
