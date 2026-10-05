@@ -64,6 +64,8 @@ public:
     // Keep fully visible regardless of the card's hover reveal (e.g. a starred star).
     void setPinned(bool pinned);
     bool isPinned() const { return m_pinned; }
+    // Tinted background while checked (off for e.g. a star toggle).
+    void setCheckedBackground(bool on) { m_checkedBackground = on; update(); }
 
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override { return sizeHint(); }
@@ -81,6 +83,7 @@ private:
     int m_iconSize;
     qreal m_reveal = 1.0;
     bool m_pinned = false;
+    bool m_checkedBackground = true;
 };
 
 // Text button. Primary (accent fill), Secondary (outlined), Ghost (text only).
@@ -137,6 +140,8 @@ public:
     QString segmentText(int index) const;
     QRect segmentRect(int index) const;
     void setSegmentFont(const QFont &font);
+    // false: each segment is as wide as its text (default: all equal).
+    void setEqualWidths(bool equal);
 
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override { return sizeHint(); }
@@ -160,13 +165,15 @@ private:
         QString toolTip;
     };
     int segmentAt(const QPoint &pos) const;
-    int segmentWidth() const;
+    int segmentWidth(int index) const;
+    int totalWidth() const;
     void selectByUser(int index);
     void updateAccessibleName();
 
     QList<Segment> m_segments;
     int m_current = 0;
     int m_hovered = -1;
+    bool m_equalWidths = true;
     QRectF m_pill;      // animated highlight rect
     QRectF m_pillFrom;
 };

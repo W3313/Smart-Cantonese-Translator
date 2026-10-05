@@ -1,6 +1,11 @@
 #include "ui/Theme.h"
 
 #include <QApplication>
+#include <QDir>
+#include <QFile>
+#include <QImage>
+#include <QSvgRenderer>
+#include <QTemporaryDir>
 #include <QGuiApplication>
 #include <QPainter>
 #include <QPainterPath>
@@ -9,6 +14,11 @@
 #include <QStyle>
 #include <QStyleHints>
 #include <QWidget>
+
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#include <dwmapi.h>
+#endif
 
 namespace sct {
 
@@ -48,9 +58,9 @@ ThemeColors lightColors()
     c.shadow = QColor(16, 24, 40);
     c.skeleton = QColor(0xEC, 0xEE, 0xF2);
     c.skeletonShine = QColor(0xF8, 0xF9, 0xFB);
-    c.infoBg = QColor(0xEA, 0xF2, 0xFD);
-    c.infoBorder = QColor(0xC8, 0xDB, 0xF7);
-    c.infoText = QColor(0x1E, 0x4F, 0x8F);
+    c.infoBg = QColor(0xFD, 0xF1, 0xF2);
+    c.infoBorder = QColor(0xF5, 0xD5, 0xDA);
+    c.infoText = QColor(0x1B, 0x1F, 0x27);
     c.warnBg = QColor(0xFF, 0xF7, 0xE3);
     c.warnBorder = QColor(0xF1, 0xDC, 0xA0);
     c.warnText = QColor(0x73, 0x4D, 0x00);
@@ -93,9 +103,9 @@ ThemeColors darkColors()
     c.shadow = QColor(0, 0, 0);
     c.skeleton = QColor(0x2A, 0x2D, 0x33);
     c.skeletonShine = QColor(0x36, 0x39, 0x41);
-    c.infoBg = QColor(0x1C, 0x27, 0x35);
-    c.infoBorder = QColor(0x2C, 0x44, 0x66);
-    c.infoText = QColor(0xA8, 0xC7, 0xF0);
+    c.infoBg = QColor(0x2A, 0x1E, 0x22);
+    c.infoBorder = QColor(0x4A, 0x2C, 0x33);
+    c.infoText = QColor(0xE7, 0xE9, 0xED);
     c.warnBg = QColor(0x2F, 0x29, 0x18);
     c.warnBorder = QColor(0x5A, 0x4A, 0x1F);
     c.warnText = QColor(0xF0, 0xD0, 0x7A);
@@ -185,124 +195,91 @@ void captureInitialPalette()
 
 const char kQss[] = R"QSS(
 QMainWindow, QDialog { background: {window}; }
-QWidget#centralArea, QWidget#headerBar, QWidget#historyPanel, QWidget#dockTitle { background: transparent; }
+QWidget#centralArea { background: transparent; }
 
-QFrame#pane {
-    background: {surface};
-    border: 1px solid {border};
-    border-radius: 14px;
-}
-QFrame#pane QPlainTextEdit, QFrame#pane QScrollArea {
-    background: transparent;
-    border: none;
-}
-QWidget#resultContent, QWidget#emptyPage, QWidget#loadingPage, QWidget#errorPage { background: transparent; }
-
+QLabel { color: {text}; }
 QLabel[role="muted"] { color: {textMuted}; }
 QLabel[role="caption"] { color: {textMuted}; }
-QLabel[role="paneTitle"] { color: {textMuted}; }
 QLabel[role="jyutping"] { color: {jyutping}; }
 QLabel[role="warning"] { color: {warnText}; }
 QLabel[role="error"] { color: {errorText}; }
 QLabel[role="success"] { color: {successText}; }
-QLabel[role="langPill"] {
+QLabel[role="keycap"] {
     background: {surface};
-    border: 1px solid {border};
-    border-radius: 10px;
-    padding: 5px 12px;
+    border: 1px solid {borderStrong};
+    border-bottom-width: 2px;
+    border-radius: 6px;
+    padding: 2px 8px;
     color: {text};
 }
-QLabel#appTitle { color: {text}; }
+QLabel a { color: {accent}; }
+
+QPlainTextEdit#sourceEdit {
+    background: transparent;
+    border: none;
+    color: {text};
+    selection-background-color: {selection};
+    selection-color: {text};
+}
+QScrollArea { background: transparent; border: none; }
+
+QLineEdit, QComboBox {
+    background: {surface};
+    color: {text};
+    border: 1px solid {border};
+    border-radius: 8px;
+    padding: 6px 10px;
+    min-height: 20px;
+    selection-background-color: {selection};
+    selection-color: {text};
+}
+QLineEdit:hover, QComboBox:hover { border-color: {borderStrong}; }
+QLineEdit:focus, QComboBox:focus, QComboBox:on { border: 1px solid {accent}; }
+QLineEdit:disabled, QComboBox:disabled { color: {textDisabled}; background: {surfaceAlt}; }
+QComboBox QLineEdit { border: none; padding: 0px; background: transparent; min-height: 0px; }
+QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: center right; width: 26px; border: none; }
+QComboBox::down-arrow { image: url({chevronPath}); width: 12px; height: 12px; }
+QComboBox QAbstractItemView {
+    background: {surface};
+    color: {text};
+    border: 1px solid {border};
+    padding: 4px;
+    outline: 0px;
+    selection-background-color: {hoverSolid};
+    selection-color: {text};
+}
+QComboBox QAbstractItemView::item { min-height: 28px; padding: 0px 8px; border-radius: 6px; }
+QComboBox QAbstractItemView::item:selected { background: {hoverSolid}; color: {text}; }
+
+QSlider { min-height: 22px; }
+QSlider::groove:horizontal { height: 4px; background: {switchOff}; border-radius: 2px; }
+QSlider::sub-page:horizontal { background: {accent}; border-radius: 2px; }
+QSlider::handle:horizontal {
+    background: {knob};
+    border: 1px solid {borderStrong};
+    width: 16px;
+    height: 16px;
+    margin: -7px 0px;
+    border-radius: 9px;
+}
+QSlider::handle:horizontal:hover, QSlider::handle:horizontal:focus { border: 1px solid {accent}; }
 
 QPushButton {
     background: {surface};
     color: {text};
     border: 1px solid {border};
     border-radius: 8px;
-    padding: 6px 14px;
+    padding: 6px 16px;
+    min-height: 20px;
 }
 QPushButton:hover { background: {surfaceAlt}; border-color: {borderStrong}; }
 QPushButton:pressed { background: {pressedSolid}; }
-QPushButton:disabled { color: {textDisabled}; background: {surfaceAlt}; border-color: {border}; }
-QPushButton:default { border-color: {accent}; }
-QPushButton[primary="true"] {
-    background: {accent};
-    color: {onAccent};
-    border: 1px solid {accent};
-    padding: 7px 18px;
-}
-QPushButton[primary="true"]:hover { background: {accentHover}; border-color: {accentHover}; }
-QPushButton[primary="true"]:pressed { background: {accentPressed}; border-color: {accentPressed}; }
-QPushButton[primary="true"]:disabled { background: {accentSoft}; border-color: {accentSoft}; color: {textDisabled}; }
-QPushButton[chip="true"] {
-    background: {surfaceAlt};
-    border: 1px solid {border};
-    border-radius: 15px;
-    padding: 6px 14px;
-    color: {text};
-}
-QPushButton[chip="true"]:hover { border-color: {accent}; color: {accent}; }
-QPushButton[link="true"] {
-    background: transparent;
-    border: none;
-    padding: 2px 4px;
-    color: {accent};
-    text-decoration: underline;
-}
-
-QToolButton {
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 8px;
-    padding: 5px;
-    color: {text};
-}
-QToolButton:hover { background: {hover}; }
-QToolButton:pressed { background: {pressed}; }
-QToolButton:checked { background: {accentSoft}; color: {accent}; }
-QToolButton:disabled { color: {textDisabled}; }
-QToolButton::menu-indicator { image: none; width: 0px; }
-QToolButton[subtle="true"] { color: {textMuted}; }
-QToolButton[subtle="true"]:hover { color: {text}; }
-
-QWidget#segmented {
-    background: {surfaceAlt};
-    border: 1px solid {border};
-    border-radius: 10px;
-}
-QWidget#segmented QToolButton {
-    border-radius: 7px;
-    padding: 4px 12px;
-    color: {textMuted};
-    border: 1px solid transparent;
-}
-QWidget#segmented QToolButton:hover { color: {text}; background: transparent; }
-QWidget#segmented QToolButton:checked {
-    background: {surface};
-    color: {text};
-    border: 1px solid {border};
-}
-
-QToolButton#providerBadge {
-    background: {surface};
-    border: 1px solid {border};
-    border-radius: 14px;
-    padding: 4px 12px 4px 8px;
-    color: {textMuted};
-}
-QToolButton#providerBadge:hover { border-color: {accent}; color: {text}; }
-QToolButton#providerBadge[warning="true"] { color: {warnText}; border-color: {warnBorder}; background: {warnBg}; }
-
-QToolButton#sectionHeader {
-    border: none;
-    padding: 4px 2px;
-    color: {textMuted};
-    background: transparent;
-}
-QToolButton#sectionHeader:hover { color: {text}; }
+QPushButton:default { background: {accent}; color: {onAccent}; border-color: {accent}; }
+QPushButton:default:hover { background: {accentHover}; border-color: {accentHover}; }
 
 QFrame[banner="info"] { background: {infoBg}; border: 1px solid {infoBorder}; border-radius: 12px; }
 QFrame[banner="info"] QLabel { color: {infoText}; }
+QFrame[banner="info"] QLabel#bannerText { color: {textMuted}; }
 QFrame[banner="warning"] { background: {warnBg}; border: 1px solid {warnBorder}; border-radius: 12px; }
 QFrame[banner="warning"] QLabel { color: {warnText}; }
 QFrame[banner="error"] { background: {errorBg}; border: 1px solid {errorBorder}; border-radius: 12px; }
@@ -310,53 +287,11 @@ QFrame[banner="error"] QLabel { color: {errorText}; }
 QFrame[banner] QLabel#bannerDetails {
     background: {surface};
     border: 1px solid {border};
-    border-radius: 6px;
-    padding: 8px;
+    border-radius: 8px;
+    padding: 8px 10px;
     color: {textMuted};
 }
-QFrame[banner] QPushButton[link="true"] { color: {text}; }
-
-QFrame#altCard {
-    background: {surfaceAlt};
-    border: 1px solid transparent;
-    border-radius: 10px;
-}
-QFrame#altCard:hover { border-color: {border}; }
-QFrame#divider { background: {border}; border: none; min-height: 1px; max-height: 1px; }
-
-QLabel#charCounter[over="true"] { color: {warnText}; }
-QLabel#directionHint { color: {accent}; }
-
-QTabWidget::pane {
-    border: 1px solid {border};
-    border-radius: 12px;
-    background: {surface};
-    top: -1px;
-}
-QTabBar::tab {
-    padding: 8px 16px;
-    margin-right: 2px;
-    color: {textMuted};
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
-}
-QTabBar::tab:selected { color: {text}; border-bottom: 2px solid {accent}; }
-QTabBar::tab:hover { color: {text}; }
-
-QGroupBox {
-    border: 1px solid {border};
-    border-radius: 10px;
-    margin-top: 18px;
-    padding: 14px 12px 10px 12px;
-}
-QGroupBox::title {
-    subcontrol-origin: margin;
-    subcontrol-position: top left;
-    left: 10px;
-    padding: 0 4px;
-    color: {textMuted};
-}
+QFrame#divider { background: {border}; border: none; }
 
 QToolTip {
     color: {tooltipText};
@@ -365,41 +300,60 @@ QToolTip {
     padding: 5px 8px;
 }
 
-QScrollBar:vertical { background: transparent; width: 12px; margin: 2px; }
-QScrollBar::handle:vertical { background: {scrollHandle}; border-radius: 4px; min-height: 32px; margin: 0 2px; }
+QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
+QScrollBar::handle:vertical { background: {scrollHandle}; border-radius: 3px; min-height: 32px; margin: 0px 2px; }
 QScrollBar::handle:vertical:hover { background: {scrollHandleHover}; }
-QScrollBar:horizontal { background: transparent; height: 12px; margin: 2px; }
-QScrollBar::handle:horizontal { background: {scrollHandle}; border-radius: 4px; min-width: 32px; margin: 2px 0; }
+QScrollBar:horizontal { background: transparent; height: 10px; margin: 2px; }
+QScrollBar::handle:horizontal { background: {scrollHandle}; border-radius: 3px; min-width: 32px; margin: 2px 0px; }
 QScrollBar::handle:horizontal:hover { background: {scrollHandleHover}; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0px; height: 0px; }
 QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 
-QStatusBar { background: {window}; color: {textMuted}; }
-QStatusBar::item { border: none; }
-QStatusBar QLabel { color: {textMuted}; }
-
-QSplitter::handle { background: transparent; }
-QMainWindow::separator { background: transparent; width: 8px; height: 8px; }
-
-QListView#historyList {
-    background: {surface};
-    border: 1px solid {border};
-    border-radius: 12px;
-    padding: 4px;
-    outline: 0;
-}
-
 QMenu {
     background: {surface};
     border: 1px solid {border};
-    padding: 4px;
+    padding: 5px;
 }
-QMenu::item { padding: 6px 24px 6px 12px; border-radius: 6px; color: {text}; }
+QMenu::item { padding: 7px 28px 7px 12px; border-radius: 6px; color: {text}; }
 QMenu::item:selected { background: {hoverSolid}; }
 QMenu::item:disabled { color: {textDisabled}; }
 QMenu::separator { height: 1px; background: {border}; margin: 4px 8px; }
-QMenu::icon { padding-left: 8px; }
+QMenu::icon { padding-left: 10px; }
+QCheckBox { color: {text}; spacing: 8px; }
 )QSS";
+
+// Style sheets can't tint images, so write the combo-box chevron in the
+// current muted colour (1x and @2x) to a private temp directory.
+QString chevronImagePath(const ThemeColors &c)
+{
+    static QTemporaryDir *dir = nullptr;
+    if (!dir) {
+        dir = new QTemporaryDir(QDir::tempPath() + QStringLiteral("/sct-theme-XXXXXX"));
+        QObject::connect(qApp, &QObject::destroyed, [] {
+            delete dir;
+            dir = nullptr;
+        });
+    }
+    if (!dir->isValid())
+        return QString();
+    const QString base = dir->filePath(c.dark ? QStringLiteral("chevron-dark") : QStringLiteral("chevron-light"));
+    const QString path = base + QStringLiteral(".png");
+    if (!QFile::exists(path)) {
+        QFile f(QStringLiteral(":/icons/chevron-down.svg"));
+        QByteArray svg = f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+        svg.replace("currentColor", c.textMuted.name(QColor::HexRgb).toLatin1());
+        for (int scale : {1, 2}) {
+            QImage img(12 * scale, 12 * scale, QImage::Format_ARGB32_Premultiplied);
+            img.fill(Qt::transparent);
+            QPainter p(&img);
+            p.setRenderHint(QPainter::Antialiasing);
+            QSvgRenderer(svg).render(&p, QRectF(0, 0, img.width(), img.height()));
+            p.end();
+            img.save(scale == 1 ? path : base + QStringLiteral("@2x.png"));
+        }
+    }
+    return QDir::fromNativeSeparators(path);
+}
 
 } // namespace
 
@@ -479,10 +433,58 @@ void Theme::apply(const QString &requestedMode)
     if (qobject_cast<QApplication *>(QCoreApplication::instance())) {
         QApplication::setPalette(makePalette(t->m_colors));
         qApp->setStyleSheet(styleSheet(t->m_colors));
+#ifdef Q_OS_WIN
+        static bool filterInstalled = false;
+        if (!filterInstalled) {
+            qApp->installEventFilter(t);  // dark title bars for windows shown later
+            filterInstalled = true;
+        }
+        for (QWidget *w : QApplication::topLevelWidgets()) {
+            if (w->isVisible())
+                applyWindowFrame(w);
+        }
+#endif
     }
     applying = false;
     if (changed)
         emit t->changed();
+}
+
+void Theme::applyWindowFrame(QWidget *window)
+{
+#ifdef Q_OS_WIN
+    // Real HWNDs only (not e.g. the offscreen platform used by tests).
+    if (!window || !window->isWindow() || QGuiApplication::platformName() != QLatin1String("windows"))
+        return;
+    const Qt::WindowType type = window->windowType();
+    if (type != Qt::Window && type != Qt::Dialog)
+        return;
+    // DWMWA_USE_IMMERSIVE_DARK_MODE is 20 on Windows 10 20H1+ and 11 (19 before).
+    const BOOL dark = isDark() ? TRUE : FALSE;
+    const HWND hwnd = reinterpret_cast<HWND>(window->winId());
+    if (FAILED(DwmSetWindowAttribute(hwnd, 20, &dark, sizeof(dark))))
+        DwmSetWindowAttribute(hwnd, 19, &dark, sizeof(dark));
+    // Repaint the non-client area so a visible window updates immediately.
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+#else
+    Q_UNUSED(window);
+#endif
+}
+
+bool Theme::eventFilter(QObject *watched, QEvent *event)
+{
+#ifdef Q_OS_WIN
+    if (event->type() == QEvent::Show && watched->isWidgetType()) {
+        auto *w = static_cast<QWidget *>(watched);
+        if (w->isWindow())
+            applyWindowFrame(w);
+    }
+#else
+    Q_UNUSED(watched);
+    Q_UNUSED(event);
+#endif
+    return false;
 }
 
 void Theme::onSystemSchemeChanged()
@@ -535,9 +537,12 @@ QString Theme::styleSheet(const ThemeColors &c)
         {QStringLiteral("errorBorder"), c.errorBorder},
         {QStringLiteral("errorText"), c.errorText},
         {QStringLiteral("successText"), c.successText},
+        {QStringLiteral("switchOff"), c.switchOff},
+        {QStringLiteral("knob"), c.knob},
     };
     for (const auto &token : tokens)
         qss.replace(QLatin1Char('{') + token.first + QLatin1Char('}'), css(token.second));
+    qss.replace(QStringLiteral("{chevronPath}"), chevronImagePath(c));
     return qss;
 }
 

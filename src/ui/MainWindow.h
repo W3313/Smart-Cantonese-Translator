@@ -7,10 +7,8 @@
 #include <QMainWindow>
 #include <QPointer>
 
-class QDockWidget;
+class QBoxLayout;
 class QLabel;
-class QSplitter;
-class QToolButton;
 
 namespace sct {
 
@@ -24,7 +22,11 @@ class TranslationService;
 
 namespace ui {
 class Banner;
+class ButtonBase;
+class DirectionPill;
+class IconButton;
 class SegmentedControl;
+class SidePanel;
 }
 
 class MainWindow : public QMainWindow
@@ -38,38 +40,40 @@ public:
 
     // ---- State & actions (also used by shortcuts and tests) -------------------
     Direction direction() const { return m_direction; }
-    // Changes direction without moving text. A shown result for the other
+    // Changes direction without moving text; a shown result for the other
     // direction is cleared.
     void setDirection(Direction direction);
-    // Swaps direction; when a result is shown it moves into the input and is
-    // translated back.
+    // Swaps direction; a shown result moves into the input and is translated back.
     void swapDirection();
     Tone tone() const { return m_tone; }
     void setTone(Tone tone);
 
     void setInputText(const QString &text);
     void translateNow();
-    // Esc: cancels a running translation, otherwise stops speech.
+    // Esc: cancels a running translation, else stops speech, else closes history.
     void cancelOrStop();
     void showResult(const TranslationResult &result, bool fromHistory = false);
     void showError(const TranslationError &error);
     void restoreHistoryEntry(const HistoryEntry &entry);
-    void setHistoryVisible(bool visible);
+    void setHistoryVisible(bool visible, bool animated = true);
     bool isHistoryVisible() const;
 
     // Opens (or raises) the non-blocking, window-modal Settings dialog.
     SettingsDialog *openSettings(SettingsDialog::Tab tab = SettingsDialog::Tab::AI);
     void showAbout();
     void showShortcuts();
+    // Transient toast at the bottom of the window.
+    void showStatus(const QString &message, const QString &iconName = QString());
 
     InputPane *inputPane() const { return m_input; }
     ResultView *resultView() const { return m_result; }
     HistoryPanel *historyPanel() const { return m_historyPanel; }
-    QDockWidget *historyDock() const { return m_historyDock; }
     ui::Banner *welcomeBanner() const { return m_welcome; }
     ui::Banner *voiceHintBanner() const { return m_voiceHint; }
     ui::SegmentedControl *toneControl() const { return m_toneControl; }
-    QToolButton *providerBadge() const { return m_providerBadge; }
+    ui::DirectionPill *directionPill() const { return m_directionPill; }
+    ui::ButtonBase *providerChip() const { return m_providerChip; }
+    QString providerChipText() const;
     SpeechController *speechController() const { return m_speechController; }
 
 protected:
@@ -79,13 +83,12 @@ protected:
 
 private:
     QWidget *buildHeader();
-    void buildHistoryDock();
     void buildShortcuts();
     void connectServices();
 
-    void updateDirectionUi();
-    void updateProviderBadge();
-    void updateWelcomeBanner();
+    void applyDirection(Direction direction, bool animated);
+    void updateProviderChip();
+    void updateWelcomeBanner(bool animated);
     void updateLayoutForWidth();
     void applySettings();
     void refreshStarFromHistory();
@@ -93,7 +96,6 @@ private:
     void onFinished(const TranslationResult &result);
     void onFailed(const TranslationError &error);
     void onVoiceUnavailable(Language lang);
-    void showStatus(const QString &message, int timeoutMs = 4000);
     QUuid findHistoryId(const TranslationResult &result) const;
 
     AppSettings *m_settings = nullptr;
@@ -108,27 +110,27 @@ private:
     bool m_welcomeDismissed = false;
     bool m_firstShow = true;
     QString m_appliedTheme;
+    int m_appliedFontSize = -1;
+    ChineseScript m_appliedScript = ChineseScript::Traditional;
+    int m_appliedDisplay = -1;
 
     // Header
     QLabel *m_logo = nullptr;
     QLabel *m_appTitle = nullptr;
-    QLabel *m_sourcePill = nullptr;
-    QLabel *m_targetPill = nullptr;
-    QToolButton *m_swap = nullptr;
-    QLabel *m_toneLabel = nullptr;
+    ui::DirectionPill *m_directionPill = nullptr;
     ui::SegmentedControl *m_toneControl = nullptr;
-    QToolButton *m_providerBadge = nullptr;
-    QToolButton *m_historyButton = nullptr;
-    QToolButton *m_settingsButton = nullptr;
-    QToolButton *m_helpButton = nullptr;
+    ui::ButtonBase *m_providerChip = nullptr;
+    ui::IconButton *m_historyButton = nullptr;
+    ui::IconButton *m_settingsButton = nullptr;
+    ui::IconButton *m_moreButton = nullptr;
 
     // Body
     ui::Banner *m_welcome = nullptr;
     ui::Banner *m_voiceHint = nullptr;
-    QSplitter *m_splitter = nullptr;
+    QBoxLayout *m_panesLayout = nullptr;
     InputPane *m_input = nullptr;
     ResultView *m_result = nullptr;
-    QDockWidget *m_historyDock = nullptr;
+    ui::SidePanel *m_historySide = nullptr;
     HistoryPanel *m_historyPanel = nullptr;
 
     QPointer<SettingsDialog> m_settingsDialog;

@@ -7,6 +7,11 @@ add_library(sct_ui STATIC ${SCT_UI_SOURCES})
 
 target_link_libraries(sct_ui PUBLIC sct_core sct_tts Qt6::Widgets Qt6::Svg)
 
+if(WIN32)
+    # DwmSetWindowAttribute: dark title bar to match the dark theme.
+    target_link_libraries(sct_ui PRIVATE dwmapi)
+endif()
+
 # Monochrome UI icons (:/icons/<name>.svg, tinted at runtime) plus the
 # application icon (:/icons/app.svg, app.png, app.ico - the .ico carries
 # hand-tuned 16-48 px images for the title bar and taskbar).

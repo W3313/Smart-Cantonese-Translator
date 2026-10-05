@@ -1,31 +1,24 @@
 #pragma once
 
 #include "core/TranslationTypes.h"
+#include "ui/Surfaces.h"
 
-#include <QFrame>
 #include <QList>
 
+class QHBoxLayout;
 class QLabel;
-class QPushButton;
 class QScrollArea;
 class QStackedWidget;
-class QToolButton;
 class QVBoxLayout;
-class QHBoxLayout;
 
 namespace sct {
 
 class SpeechController;
 
-namespace ui {
-class Banner;
-class CollapsibleSection;
-class SpeakButton;
-}
-
-// Right-hand pane: shows the translation with Jyutping, alternatives and
-// notes, plus empty / loading / error states.
-class ResultView : public QFrame
+// Right card: the translation with Jyutping, alternatives and notes, plus
+// empty / loading (shimmer skeleton) / error states. New results are revealed
+// with a short staggered fade + upward slide.
+class ResultView : public ui::Card
 {
     Q_OBJECT
 
@@ -42,7 +35,7 @@ public:
     void showEmpty();
     void showLoading();
     // fromHistory marks results restored from history (shown in the footer).
-    void showResult(const TranslationResult &result, bool fromHistory = false);
+    void showResult(const TranslationResult &result, bool fromHistory = false, bool animated = true);
     void showError(const TranslationError &error);
     void setStarred(bool starred);
 
@@ -60,21 +53,18 @@ public:
     bool isStarred() const;
     ui::Banner *errorBanner() const { return m_errorBanner; }
     ui::SpeakButton *speakButton() const { return m_speak; }
+    ui::Disclosure *alternativesSection() const { return m_altSection; }
+    ui::Disclosure *notesSection() const { return m_notesSection; }
 
-    // Clipboard helpers (also used by the Ctrl+Shift+C shortcut).
     void copyTranslation();
     void copyWithJyutping();
 
 signals:
-    void cancelRequested();
     void retryRequested();
     void openSettingsRequested();
     void starToggled(bool starred);
     void exampleChosen(const QString &text);
-    void statusMessage(const QString &message);
-
-protected:
-    void changeEvent(QEvent *event) override;
+    void statusMessage(const QString &message, const QString &iconName);
 
 private:
     QWidget *buildEmptyPage();
@@ -89,6 +79,8 @@ private:
     void applyVisibility();
     void updateStarButton();
     void updateFooter();
+    void reveal();
+    void flashCopied(ui::IconButton *button);
 
     Page m_page = Page::Empty;
     Direction m_direction = Direction::EnglishToCantonese;
@@ -97,37 +89,36 @@ private:
     bool m_showJyutping = true;
     bool m_showAlternatives = true;
     bool m_showNotes = true;
+    bool m_altExpanded = false;    // user's last choice, kept across results
+    bool m_notesExpanded = false;
     int m_pointSize = 13;
     SpeechController *m_speech = nullptr;
 
-    QLabel *m_paneTitle = nullptr;
-    QLabel *m_badge = nullptr;
     QStackedWidget *m_stack = nullptr;
 
     // Empty page
-    QLabel *m_emptyTitle = nullptr;
     QHBoxLayout *m_examplesRow = nullptr;
-    QList<QPushButton *> m_exampleButtons;
-
-    // Loading page
-    QPushButton *m_cancel = nullptr;
+    QList<ui::Button *> m_exampleButtons;
 
     // Result page
     QScrollArea *m_scroll = nullptr;
+    QVBoxLayout *m_contentLayout = nullptr;
     QLabel *m_translation = nullptr;
     QLabel *m_jyutpingCaption = nullptr;
     QLabel *m_jyutping = nullptr;
     QLabel *m_literal = nullptr;
+    QWidget *m_actions = nullptr;
     ui::SpeakButton *m_speak = nullptr;
-    QToolButton *m_copy = nullptr;
-    QToolButton *m_copyJyutping = nullptr;
-    QToolButton *m_star = nullptr;
-    ui::CollapsibleSection *m_altSection = nullptr;
-    ui::CollapsibleSection *m_notesSection = nullptr;
+    ui::IconButton *m_copy = nullptr;
+    ui::IconButton *m_copyJyutping = nullptr;
+    ui::IconButton *m_star = nullptr;
+    ui::Disclosure *m_altSection = nullptr;
+    ui::Disclosure *m_notesSection = nullptr;
     QLabel *m_footer = nullptr;
     QList<QWidget *> m_altCards;
     QList<QLabel *> m_altTextLabels;
     QList<QLabel *> m_altJyutpingLabels;
+    QList<QLabel *> m_altNoteLabels;
     QList<QLabel *> m_noteLabels;
 
     // Error page

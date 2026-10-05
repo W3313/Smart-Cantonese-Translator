@@ -6,26 +6,28 @@
 #include "core/Version.h"
 #include "tts/SpeechService.h"
 #include "ui/AboutDialog.h"
+#include "ui/Controls.h"
 #include "ui/HistoryPanel.h"
 #include "ui/InputPane.h"
+#include "ui/Motion.h"
 #include "ui/ResultView.h"
 #include "ui/SpeechController.h"
+#include "ui/Surfaces.h"
 #include "ui/Theme.h"
-#include "ui/Widgets.h"
 
 #include <QAction>
+#include <QBoxLayout>
 #include <QCloseEvent>
 #include <QDesktopServices>
-#include <QDockWidget>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenu>
-#include <QPushButton>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPlainTextEdit>
 #include <QShortcut>
-#include <QSplitter>
-#include <QStatusBar>
 #include <QTimer>
-#include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -37,6 +39,7 @@ namespace {
 
 const QString kClaudeKeysUrl = QStringLiteral("https://console.anthropic.com/settings/keys");
 const QString kOpenAiKeysUrl = QStringLiteral("https://platform.openai.com/api-keys");
+constexpr int kHistoryWidth = 356;  // includes the 16 px gap to the result card
 
 QString shortProviderName(const QString &id)
 {
@@ -47,13 +50,138 @@ QString shortProviderName(const QString &id)
     return id;
 }
 
-// Shortcut keys, shared by QShortcuts and tooltips.
 QKeySequence keyTranslate() { return QKeySequence(Qt::CTRL | Qt::Key_Return); }
 QKeySequence keySwap() { return QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S); }
 QKeySequence keySpeak() { return QKeySequence(Qt::CTRL | Qt::Key_R); }
 QKeySequence keyHistory() { return QKeySequence(Qt::CTRL | Qt::Key_H); }
 QKeySequence keySettings() { return QKeySequence(Qt::CTRL | Qt::Key_Comma); }
 QKeySequence keyCopy() { return QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C); }
+
+// "● Claude · claude-opus-5-5": provider status; opens Settings.
+class StatusChip : public ui::ButtonBase
+{
+public:
+    explicit StatusChip(QWidget *parent)
+        : ui::ButtonBase(parent)
+    {
+        setFont(Theme::uiFont(9, QFont::Medium));
+        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    }
+
+    void setWarning(bool warning)
+    {
+        m_warning = warning;
+        update();
+    }
+
+    QSize sizeHint() const override { return QSize(fontMetrics().horizontalAdvance(text()) + 12 + 8 + 8 + 12, 30); }
+    QSize minimumSizeHint() const override { return sizeHint(); }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        const ThemeColors &c = Theme::colors();
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        const QRectF r = QRectF(rect()).adjusted(1, 1, -1, -1);
+        QPainterPath path;
+        path.addRoundedRect(r, r.height() / 2, r.height() / 2);
+        p.fillPath(path, m_warning ? c.warnBg : ui::withAlpha(c.hover, hoverProgress()));
+        if (m_warning) {
+            p.setPen(QPen(c.warnBorder, 1));
+            p.drawPath(path);
+        }
+        const QColor dot = m_warning ? c.warnText : c.successText;
+        p.setPen(Qt::NoPen);
+        p.setBrush(dot);
+        p.drawEllipse(QPointF(r.left() + 14, r.center().y()), 3.5, 3.5);
+        p.setPen(m_warning ? c.warnText : ui::mix(c.textMuted, c.text, hoverProgress()));
+        p.setFont(font());
+        p.drawText(r.adjusted(24, 0, -10, 0), Qt::AlignLeft | Qt::AlignVCenter, text());
+        paintFocusRing(&p, QRectF(rect()), r.height() / 2 + 1);
+    }
+
+private:
+    bool m_warning = false;
+};
+
+// Places the left/right groups at the edges and keeps the centre group
+// centred in the window. When space runs out it hides the app title, then the
+// provider chip, so nothing ever overlaps.
+class HeaderBar : public QWidget
+{
+public:
+    HeaderBar(QWidget *left, QWidget *centre, QWidget *right, QWidget *title, QWidget *chip, QWidget *parent)
+        : QWidget(parent)
+        , m_left(left)
+        , m_centre(centre)
+        , m_right(right)
+        , m_title(title)
+        , m_chip(chip)
+    {
+        for (QWidget *w : {left, centre, right})
+            w->setParent(this);
+        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    }
+
+    QSize sizeHint() const override
+    {
+        const int h = qMax(m_left->sizeHint().height(), qMax(m_centre->sizeHint().height(), m_right->sizeHint().height()));
+        return QSize(m_left->sizeHint().width() + m_centre->sizeHint().width() + m_right->sizeHint().width() + 48, h);
+    }
+    QSize minimumSizeHint() const override { return QSize(m_centre->sizeHint().width(), sizeHint().height()); }
+
+protected:
+    bool event(QEvent *e) override
+    {
+        // A group's size hint changed (e.g. the provider chip text).
+        if (e->type() == QEvent::LayoutRequest)
+            relayout();
+        return QWidget::event(e);
+    }
+
+    void resizeEvent(QResizeEvent *) override { relayout(); }
+
+private:
+    void relayout()
+    {
+        const int w = width();
+        const int h = height();
+        const int gap = 16;
+        const int cw = m_centre->sizeHint().width();
+        // Decide from the full widths so showing/hiding never oscillates.
+        const int chipW = m_chip->sizeHint().width() + 8;
+        int rightW = m_right->sizeHint().width() + (m_chip->isHidden() ? chipW : 0);
+        const int logoW = 28;
+        const int titleW = m_title->sizeHint().width() + 10;
+        auto fits = [&](int leftW, int rw) { return leftW + gap + cw + gap + rw <= w; };
+        const bool showTitle = fits(logoW + titleW, rightW);
+        const bool showChip = fits(logoW, rightW);
+        if (!showChip)
+            rightW -= chipW;
+        if (m_title->isHidden() == showTitle)
+            m_title->setVisible(showTitle);
+        if (m_chip->isHidden() == showChip)
+            m_chip->setVisible(showChip);
+        const int leftW = logoW + (showTitle ? titleW : 0);
+
+        const int lh = m_left->sizeHint().height();
+        const int ch = m_centre->sizeHint().height();
+        const int rh = m_right->sizeHint().height();
+        m_right->setGeometry(w - rightW, (h - rh) / 2, rightW, rh);
+        int cx = (w - cw) / 2;
+        cx = qMin(cx, w - rightW - gap - cw);
+        cx = qMax(cx, leftW + gap);
+        m_left->setGeometry(0, (h - lh) / 2, leftW, lh);
+        m_centre->setGeometry(cx, (h - ch) / 2, cw, ch);
+    }
+
+    QWidget *m_left;
+    QWidget *m_centre;
+    QWidget *m_right;
+    QWidget *m_title;
+    QWidget *m_chip;
+};
 
 } // namespace
 
@@ -67,22 +195,22 @@ MainWindow::MainWindow(AppSettings *settings, TranslationService *translation, S
     setObjectName(QStringLiteral("mainWindow"));
     setWindowTitle(QStringLiteral(SCT_APP_NAME));
     setWindowIcon(ui::appIcon());
-    setDockOptions(QMainWindow::AnimatedDocks);
+    setMinimumSize(780, 540);
 
     m_speechController = new SpeechController(m_speech, this);
 
     auto *central = new QWidget(this);
     central->setObjectName(QStringLiteral("centralArea"));
     auto *layout = new QVBoxLayout(central);
-    layout->setContentsMargins(16, 10, 8, 4);
-    layout->setSpacing(10);
+    layout->setContentsMargins(20, 14, 20, 16);
+    layout->setSpacing(12);
     layout->addWidget(buildHeader());
 
     m_welcome = new ui::Banner(ui::Banner::Kind::Info, central);
     m_welcome->setObjectName(QStringLiteral("welcomeBanner"));
     m_welcome->setClosable(true);
-    QPushButton *setup = m_welcome->addButton(tr("Open Settings"), true);
-    connect(setup, &QPushButton::clicked, this, [this] { openSettings(SettingsDialog::Tab::AI); });
+    ui::Button *setup = m_welcome->addButton(tr("Open Settings"), true);
+    connect(setup, &QAbstractButton::clicked, this, [this] { openSettings(SettingsDialog::Tab::AI); });
     connect(m_welcome, &ui::Banner::closed, this, [this] { m_welcomeDismissed = true; });
     m_welcome->hide();
     layout->addWidget(m_welcome);
@@ -91,57 +219,66 @@ MainWindow::MainWindow(AppSettings *settings, TranslationService *translation, S
     m_voiceHint->setObjectName(QStringLiteral("voiceHintBanner"));
     m_voiceHint->setClosable(true);
     m_voiceHint->setTitle(tr("No Cantonese voice is available for read-aloud"));
-    QPushButton *speechSettings = m_voiceHint->addButton(tr("Speech settings"));
-    connect(speechSettings, &QPushButton::clicked, this, [this] { openSettings(SettingsDialog::Tab::Speech); });
+    ui::Button *speechSettings = m_voiceHint->addButton(tr("Speech settings"));
+    connect(speechSettings, &QAbstractButton::clicked, this, [this] { openSettings(SettingsDialog::Tab::Speech); });
     connect(m_voiceHint, &ui::Banner::closed, this, [this] { m_voiceHintDismissed = true; });
     m_voiceHint->hide();
     layout->addWidget(m_voiceHint);
 
-    m_splitter = new QSplitter(Qt::Horizontal, central);
-    m_splitter->setChildrenCollapsible(false);
-    m_splitter->setHandleWidth(12);
-    m_input = new InputPane(m_splitter);
-    m_result = new ResultView(m_splitter);
-    m_input->setMinimumSize(300, 220);
-    m_result->setMinimumSize(300, 220);
-    m_splitter->addWidget(m_input);
-    m_splitter->addWidget(m_result);
-    m_splitter->setStretchFactor(0, 1);
-    m_splitter->setStretchFactor(1, 1);
-    layout->addWidget(m_splitter, 1);
+    // Cards (side by side, stacked when narrow) + the slide-in history panel.
+    auto *bodyRow = new QHBoxLayout;
+    bodyRow->setContentsMargins(0, 0, 0, 0);
+    bodyRow->setSpacing(0);
+    auto *panes = new QWidget(central);
+    m_panesLayout = new QBoxLayout(QBoxLayout::LeftToRight, panes);
+    m_panesLayout->setContentsMargins(0, 0, 0, 0);
+    m_panesLayout->setSpacing(14);
+    m_input = new InputPane(panes);
+    m_result = new ResultView(panes);
+    m_input->setMinimumSize(280, 200);
+    m_result->setMinimumSize(280, 220);
+    m_panesLayout->addWidget(m_input, 1);
+    m_panesLayout->addWidget(m_result, 1);
+    bodyRow->addWidget(panes, 1);
+
+    auto *historyHost = new QWidget;
+    auto *historyHostLayout = new QHBoxLayout(historyHost);
+    historyHostLayout->setContentsMargins(14, 0, 0, 0);
+    m_historyPanel = new HistoryPanel(m_translation ? m_translation->history() : nullptr, historyHost);
+    historyHostLayout->addWidget(m_historyPanel);
+    m_historySide = new ui::SidePanel(historyHost, kHistoryWidth, central);
+    m_historySide->setObjectName(QStringLiteral("historySidePanel"));
+    bodyRow->addWidget(m_historySide);
+    layout->addLayout(bodyRow, 1);
     setCentralWidget(central);
 
     m_input->setSpeechController(m_speechController);
     m_result->setSpeechController(m_speechController);
 
-    buildHistoryDock();
     buildShortcuts();
-
-    statusBar()->setSizeGripEnabled(true);
 
     // Restore state.
     if (m_settings) {
         m_direction = m_settings->direction();
         m_tone = m_settings->tone();
         if (!restoreGeometry(m_settings->windowGeometry()))
-            resize(1220, 760);
-        restoreState(m_settings->windowState());
-        m_historyDock->setVisible(m_settings->historyVisible());
+            resize(1180, 720);
     } else {
-        resize(1220, 760);
+        resize(1180, 720);
     }
-    m_toneControl->setCurrentIndex(int(m_tone));
-    updateDirectionUi();
+    m_toneControl->setCurrentIndex(int(m_tone), false);
+    applyDirection(m_direction, false);
+    setHistoryVisible(UiPrefs::instance()->historyVisible(), false);
     applySettings();
 
-    // Wiring between panes.
+    // Wiring between the panes.
     connect(m_input, &InputPane::translateRequested, this, &MainWindow::translateNow);
+    connect(m_input, &InputPane::cancelRequested, this, &MainWindow::cancelOrStop);
     connect(m_input, &InputPane::switchDirectionRequested, this, [this] { setDirection(reversed(m_direction)); });
     connect(m_input, &InputPane::cleared, this, [this] {
         if (!m_translation || !m_translation->isBusy())
             m_result->showEmpty();
     });
-    connect(m_result, &ResultView::cancelRequested, this, &MainWindow::cancelOrStop);
     connect(m_result, &ResultView::retryRequested, this, [this] {
         if (!m_lastRequest.text.trimmed().isEmpty() && m_translation)
             m_translation->translate(m_lastRequest);
@@ -150,13 +287,17 @@ MainWindow::MainWindow(AppSettings *settings, TranslationService *translation, S
     });
     connect(m_result, &ResultView::openSettingsRequested, this, [this] { openSettings(SettingsDialog::Tab::AI); });
     connect(m_result, &ResultView::starToggled, this, &MainWindow::onStarToggled);
-    connect(m_result, &ResultView::statusMessage, this, [this](const QString &m) { showStatus(m); });
+    connect(m_result, &ResultView::statusMessage, this, &MainWindow::showStatus);
     connect(m_result, &ResultView::exampleChosen, this, [this](const QString &text) {
         setInputText(text);
         translateNow();
     });
+    connect(m_historyPanel, &HistoryPanel::entryActivated, this, &MainWindow::restoreHistoryEntry);
+    connect(m_historyPanel, &HistoryPanel::statusMessage, this, &MainWindow::showStatus);
+    connect(m_historyPanel, &HistoryPanel::closeRequested, this, [this] { setHistoryVisible(false); });
     connect(m_speechController, &SpeechController::voiceUnavailable, this, &MainWindow::onVoiceUnavailable);
-    connect(m_speechController, &SpeechController::message, this, [this](const QString &m) { showStatus(m, 6000); });
+    connect(m_speechController, &SpeechController::message, this, [this](const QString &m) { showStatus(m); });
+    connect(UiPrefs::instance(), &UiPrefs::changed, this, [this] { m_historyButton->setChecked(isHistoryVisible()); });
 
     connectServices();
     updateLayoutForWidth();
@@ -168,139 +309,93 @@ MainWindow::~MainWindow() = default;
 
 QWidget *MainWindow::buildHeader()
 {
-    auto *header = new QWidget(this);
-    header->setObjectName(QStringLiteral("headerBar"));
-    auto *h = new QHBoxLayout(header);
-    h->setContentsMargins(0, 0, 8, 0);
-    h->setSpacing(8);
-
-    m_logo = new QLabel(header);
-    m_logo->setPixmap(ui::appLogo(30, devicePixelRatioF()));
-    m_logo->setFixedSize(30, 30);
-    h->addWidget(m_logo);
-    m_appTitle = new QLabel(QStringLiteral(SCT_APP_NAME), header);
+    // Left: logo + name.
+    auto *left = new QWidget;
+    auto *lh = new QHBoxLayout(left);
+    lh->setContentsMargins(0, 0, 0, 0);
+    lh->setSpacing(10);
+    m_logo = new QLabel(left);
+    m_logo->setFixedSize(28, 28);
+    m_logo->setPixmap(ui::appLogo(28, devicePixelRatioF()));
+    lh->addWidget(m_logo);
+    m_appTitle = new QLabel(QStringLiteral(SCT_APP_NAME), left);
     m_appTitle->setObjectName(QStringLiteral("appTitle"));
-    m_appTitle->setFont(Theme::uiFont(12, QFont::DemiBold));
-    h->addWidget(m_appTitle);
-    h->addStretch(1);
+    m_appTitle->setFont(Theme::uiFont(11.5, QFont::DemiBold));
+    m_appTitle->setMinimumWidth(0);
+    lh->addWidget(m_appTitle);
+    lh->addStretch(1);
 
-    // Direction: [English] ⇄ [廣東話 Cantonese]
-    m_sourcePill = new QLabel(header);
-    m_sourcePill->setProperty("role", QStringLiteral("langPill"));
-    m_sourcePill->setAlignment(Qt::AlignCenter);
-    m_targetPill = new QLabel(header);
-    m_targetPill->setProperty("role", QStringLiteral("langPill"));
-    m_targetPill->setAlignment(Qt::AlignCenter);
-    for (QLabel *pill : {m_sourcePill, m_targetPill})
-        pill->setFont(Theme::textFont(Language::Cantonese, 10.5));
-    m_sourcePill->setToolTip(tr("Translate from"));
-    m_targetPill->setToolTip(tr("Translate to"));
-    m_swap = ui::makeIconButton(QStringLiteral("swap"), ui::withShortcut(tr("Swap languages"), keySwap()), header,
-                                IconTone::Text, 20);
-    m_swap->setObjectName(QStringLiteral("swapButton"));
-    connect(m_swap, &QToolButton::clicked, this, &MainWindow::swapDirection);
-    h->addWidget(m_sourcePill);
-    h->addWidget(m_swap);
-    h->addWidget(m_targetPill);
-    h->addSpacing(18);
-
-    m_toneLabel = new QLabel(tr("Tone"), header);
-    m_toneLabel->setProperty("role", QStringLiteral("muted"));
-    h->addWidget(m_toneLabel);
-    m_toneControl = new ui::SegmentedControl(header);
-    m_toneControl->setProperty("toneControl", true);
-    m_toneControl->addSegment(tr("Casual"), tr("Casual: relaxed, everyday Cantonese - how friends and family talk "
-                                                "(e.g. 咩呀, 得啦). For English, informal wording."));
-    m_toneControl->addSegment(tr("Neutral"), tr("Neutral: natural, standard spoken Cantonese that suits most situations."));
-    m_toneControl->addSegment(tr("Polite"), tr("Polite: courteous Cantonese for customers, elders and formal "
-                                               "situations (e.g. 唔該, 請問). For English, formal wording."));
+    // Centre: direction pill + tone.
+    auto *centre = new QWidget;
+    auto *ch = new QHBoxLayout(centre);
+    ch->setContentsMargins(0, 0, 0, 0);
+    ch->setSpacing(12);
+    m_directionPill = new ui::DirectionPill(centre);
+    m_directionPill->setObjectName(QStringLiteral("directionPill"));
+    m_directionPill->setToolTip(ui::withShortcut(tr("Swap languages"), keySwap()));
+    connect(m_directionPill, &QAbstractButton::clicked, this, &MainWindow::swapDirection);
+    ch->addWidget(m_directionPill);
+    m_toneControl = new ui::SegmentedControl(centre);
+    m_toneControl->setObjectName(QStringLiteral("toneControl"));
+    m_toneControl->addSegment(tr("Casual"), tr("Casual - relaxed, everyday Cantonese, how friends and family talk "
+                                                "(咩呀, 得啦). Informal English the other way."));
+    m_toneControl->addSegment(tr("Neutral"), tr("Neutral - natural spoken Cantonese that suits most situations."));
+    m_toneControl->addSegment(tr("Polite"), tr("Polite - courteous Cantonese for customers, elders and formal "
+                                               "situations (唔該, 請問). Formal English the other way."));
     connect(m_toneControl, &ui::SegmentedControl::currentIndexChanged, this, [this](int index) {
         setTone(static_cast<Tone>(index));
         // Re-translate the shown text in the new tone.
         if (m_result->page() == ResultView::Page::Result && m_result->hasResult()
             && m_result->result().request.text.trimmed() == m_input->text().trimmed()
-            && m_result->result().request.tone != m_tone) {
+            && m_result->result().request.tone != m_tone)
             translateNow();
-        }
     });
-    h->addWidget(m_toneControl);
-    h->addStretch(1);
+    ch->addWidget(m_toneControl);
 
-    m_providerBadge = new QToolButton(header);
-    m_providerBadge->setObjectName(QStringLiteral("providerBadge"));
-    m_providerBadge->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    m_providerBadge->setIconSize(QSize(16, 16));
-    m_providerBadge->setCursor(Qt::PointingHandCursor);
-    connect(m_providerBadge, &QToolButton::clicked, this, [this] { openSettings(SettingsDialog::Tab::AI); });
-    h->addWidget(m_providerBadge);
-    h->addSpacing(4);
-
-    m_historyButton = ui::makeIconButton(QStringLiteral("history"), ui::withShortcut(tr("History"), keyHistory()),
-                                         header, IconTone::Text, 20);
+    // Right: provider status, history, settings, more.
+    auto *right = new QWidget;
+    auto *rh = new QHBoxLayout(right);
+    rh->setContentsMargins(0, 0, 0, 0);
+    rh->setSpacing(2);
+    auto *chip = new StatusChip(right);
+    chip->setObjectName(QStringLiteral("providerChip"));
+    m_providerChip = chip;
+    connect(m_providerChip, &QAbstractButton::clicked, this, [this] { openSettings(SettingsDialog::Tab::AI); });
+    rh->addWidget(m_providerChip);
+    rh->addSpacing(6);
+    m_historyButton = new ui::IconButton(QStringLiteral("history"), ui::withShortcut(tr("History"), keyHistory()), right,
+                                         IconTone::Text, 20);
     m_historyButton->setObjectName(QStringLiteral("historyButton"));
     m_historyButton->setCheckable(true);
-    h->addWidget(m_historyButton);
-
-    m_settingsButton = ui::makeIconButton(QStringLiteral("settings"), ui::withShortcut(tr("Settings"), keySettings()),
-                                          header, IconTone::Text, 20);
+    connect(m_historyButton, &QAbstractButton::clicked, this, [this] { setHistoryVisible(!isHistoryVisible()); });
+    rh->addWidget(m_historyButton);
+    m_settingsButton = new ui::IconButton(QStringLiteral("settings"), ui::withShortcut(tr("Settings"), keySettings()),
+                                          right, IconTone::Text, 20);
     m_settingsButton->setObjectName(QStringLiteral("settingsButton"));
-    connect(m_settingsButton, &QToolButton::clicked, this, [this] { openSettings(SettingsDialog::Tab::AI); });
-    h->addWidget(m_settingsButton);
+    connect(m_settingsButton, &QAbstractButton::clicked, this, [this] { openSettings(SettingsDialog::Tab::AI); });
+    rh->addWidget(m_settingsButton);
+    m_moreButton = new ui::IconButton(QStringLiteral("more"), tr("More"), right, IconTone::Text, 20);
+    m_moreButton->setObjectName(QStringLiteral("moreButton"));
+    connect(m_moreButton, &QAbstractButton::clicked, this, [this] {
+        QMenu menu(this);
+        connect(menu.addAction(ui::icon(QStringLiteral("keyboard")), tr("Keyboard shortcuts")), &QAction::triggered,
+                this, &MainWindow::showShortcuts);
+        menu.addSeparator();
+        connect(menu.addAction(ui::icon(QStringLiteral("external")), tr("Get a Claude API key")), &QAction::triggered,
+                this, [] { QDesktopServices::openUrl(QUrl(kClaudeKeysUrl)); });
+        connect(menu.addAction(ui::icon(QStringLiteral("external")), tr("Get an OpenAI API key")), &QAction::triggered,
+                this, [] { QDesktopServices::openUrl(QUrl(kOpenAiKeysUrl)); });
+        menu.addSeparator();
+        connect(menu.addAction(ui::icon(QStringLiteral("info")), tr("About %1").arg(QStringLiteral(SCT_APP_NAME))),
+                &QAction::triggered, this, &MainWindow::showAbout);
+        menu.exec(m_moreButton->mapToGlobal(QPoint(m_moreButton->width() - menu.sizeHint().width(),
+                                                   m_moreButton->height() + 4)));
+    });
+    rh->addWidget(m_moreButton);
 
-    m_helpButton = ui::makeIconButton(QStringLiteral("help"), tr("Help"), header, IconTone::Text, 20);
-    m_helpButton->setPopupMode(QToolButton::InstantPopup);
-    auto *menu = new QMenu(m_helpButton);
-    connect(menu->addAction(ui::icon(QStringLiteral("keyboard")), tr("Keyboard shortcuts")), &QAction::triggered, this,
-            &MainWindow::showShortcuts);
-    menu->addSeparator();
-    connect(menu->addAction(ui::icon(QStringLiteral("external")), tr("Get a Claude API key")), &QAction::triggered, this,
-            [] { QDesktopServices::openUrl(QUrl(kClaudeKeysUrl)); });
-    connect(menu->addAction(ui::icon(QStringLiteral("external")), tr("Get an OpenAI API key")), &QAction::triggered,
-            this, [] { QDesktopServices::openUrl(QUrl(kOpenAiKeysUrl)); });
-    menu->addSeparator();
-    connect(menu->addAction(ui::icon(QStringLiteral("info")), tr("About %1").arg(QStringLiteral(SCT_APP_NAME))),
-            &QAction::triggered, this, &MainWindow::showAbout);
-    m_helpButton->setMenu(menu);
-    h->addWidget(m_helpButton);
+    auto *header = new HeaderBar(left, centre, right, m_appTitle, m_providerChip, this);
+    header->setObjectName(QStringLiteral("headerBar"));
     return header;
-}
-
-void MainWindow::buildHistoryDock()
-{
-    m_historyDock = new QDockWidget(tr("History"), this);
-    m_historyDock->setObjectName(QStringLiteral("historyDock"));
-    m_historyDock->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable);
-    m_historyDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-
-    // Custom title bar: matches the pane headers instead of the Fusion strip.
-    auto *title = new QWidget(m_historyDock);
-    title->setObjectName(QStringLiteral("dockTitle"));
-    auto *th = new QHBoxLayout(title);
-    th->setContentsMargins(12, 12, 14, 4);
-    auto *label = new QLabel(tr("History"), title);
-    label->setProperty("role", QStringLiteral("paneTitle"));
-    label->setFont(Theme::uiFont(-1, QFont::DemiBold));
-    th->addWidget(label);
-    th->addStretch(1);
-    QToolButton *close = ui::makeIconButton(QStringLiteral("close"), ui::withShortcut(tr("Hide history"), keyHistory()),
-                                            title, IconTone::Muted, 16);
-    connect(close, &QToolButton::clicked, m_historyDock, &QDockWidget::hide);
-    th->addWidget(close);
-    m_historyDock->setTitleBarWidget(title);
-
-    m_historyPanel = new HistoryPanel(m_translation ? m_translation->history() : nullptr, m_historyDock);
-    m_historyPanel->setMinimumWidth(260);
-    m_historyDock->setWidget(m_historyPanel);
-    addDockWidget(Qt::RightDockWidgetArea, m_historyDock);
-    resizeDocks({m_historyDock}, {340}, Qt::Horizontal);
-
-    QAction *toggle = m_historyDock->toggleViewAction();
-    connect(m_historyButton, &QToolButton::clicked, this, [this] { setHistoryVisible(!isHistoryVisible()); });
-    connect(toggle, &QAction::toggled, m_historyButton, &QToolButton::setChecked);
-    m_historyButton->setChecked(!m_historyDock->isHidden());
-
-    connect(m_historyPanel, &HistoryPanel::entryActivated, this, &MainWindow::restoreHistoryEntry);
-    connect(m_historyPanel, &HistoryPanel::statusMessage, this, [this](const QString &m) { showStatus(m); });
 }
 
 void MainWindow::buildShortcuts()
@@ -309,7 +404,6 @@ void MainWindow::buildShortcuts()
         auto *s = new QShortcut(key, this);
         s->setContext(Qt::WindowShortcut);
         connect(s, &QShortcut::activated, this, slot);
-        return s;
     };
     add(keyTranslate(), [this] { translateNow(); });
     add(QKeySequence(Qt::CTRL | Qt::Key_Enter), [this] { translateNow(); });
@@ -327,8 +421,7 @@ void MainWindow::buildShortcuts()
     add(keyCopy(), [this] { m_result->copyTranslation(); });
     add(QKeySequence(Qt::CTRL | Qt::Key_F), [this] {
         setHistoryVisible(true);
-        m_historyPanel->searchBox()->setFocus();
-        m_historyPanel->searchBox()->selectAll();
+        m_historyPanel->focusSearch();
     });
     add(QKeySequence(Qt::CTRL | Qt::Key_L), [this] { m_input->focusEditor(); });
     add(QKeySequence(Qt::Key_F1), [this] { showShortcuts(); });
@@ -343,11 +436,12 @@ void MainWindow::connectServices()
         });
         connect(m_translation, &TranslationService::finished, this, &MainWindow::onFinished);
         connect(m_translation, &TranslationService::failed, this, &MainWindow::onFailed);
+        connect(m_translation, &TranslationService::busyChanged, m_input, &InputPane::setBusy);
         if (HistoryStore *h = m_translation->history())
             connect(h, &HistoryStore::changed, this, &MainWindow::refreshStarFromHistory);
     }
     if (m_speech) {
-        connect(m_speech, &SpeechService::notice, this, [this](const QString &m) { showStatus(m, 8000); });
+        connect(m_speech, &SpeechService::notice, this, [this](const QString &m) { showStatus(m, QStringLiteral("info")); });
         connect(m_speech, &SpeechService::voicesChanged, this, [this] {
             if (m_speech->canSpeak(Language::Cantonese))
                 m_voiceHint->hide();
@@ -359,15 +453,22 @@ void MainWindow::connectServices()
 
 // ---- Direction & tone -------------------------------------------------------------------
 
+void MainWindow::applyDirection(Direction direction, bool animated)
+{
+    m_direction = direction;
+    m_directionPill->setDirection(direction, animated);
+    m_input->setDirection(direction);
+    m_result->setDirection(direction);
+}
+
 void MainWindow::setDirection(Direction direction)
 {
     if (direction == m_direction)
         return;
-    m_direction = direction;
     if (m_settings)
         m_settings->setDirection(direction);
-    updateDirectionUi();
-    // A result for the other direction no longer matches the panes.
+    motion::crossFade(m_input, motion::kNormal);
+    applyDirection(direction, true);
     if (m_result->page() == ResultView::Page::Result && m_result->result().request.direction != direction)
         m_result->showEmpty();
 }
@@ -379,10 +480,19 @@ void MainWindow::swapDirection()
     const QString moved = hasResult ? m_result->result().translation.trimmed() : QString();
     if (m_translation && m_translation->isBusy())
         m_translation->cancel();
-    setDirection(reversed(m_direction));
+    const Direction next = reversed(m_direction);
+    if (m_settings)
+        m_settings->setDirection(next);
+    // Text trades places with a quick cross-fade.
+    motion::crossFade(m_input, motion::kNormal);
+    if (!moved.isEmpty())
+        motion::crossFade(m_result, motion::kNormal);
+    applyDirection(next, true);
     if (!moved.isEmpty()) {
         m_input->setText(moved);
         translateNow();
+    } else if (m_result->page() == ResultView::Page::Result || m_result->page() == ResultView::Page::Error) {
+        m_result->showEmpty();
     }
     m_input->focusEditor();
 }
@@ -390,26 +500,10 @@ void MainWindow::swapDirection()
 void MainWindow::setTone(Tone tone)
 {
     m_tone = tone;
-    m_toneControl->setCurrentIndex(int(tone));
+    if (m_toneControl->currentIndex() != int(tone))
+        m_toneControl->setCurrentIndex(int(tone), true);
     if (m_settings && m_settings->tone() != tone)
         m_settings->setTone(tone);
-}
-
-void MainWindow::updateDirectionUi()
-{
-    const Language src = sourceLanguage(m_direction);
-    const Language tgt = targetLanguage(m_direction);
-    m_sourcePill->setText(Theme::languageLabel(src));
-    m_targetPill->setText(Theme::languageLabel(tgt));
-    // Same width for both pills keeps the swap button in place.
-    const QFontMetrics fm(m_sourcePill->font());
-    const int w = qMax(fm.horizontalAdvance(Theme::languageLabel(Language::English)),
-                       fm.horizontalAdvance(Theme::languageLabel(Language::Cantonese)))
-                  + 34;
-    m_sourcePill->setFixedWidth(w);
-    m_targetPill->setFixedWidth(w);
-    m_input->setDirection(m_direction);
-    m_result->setDirection(m_direction);
 }
 
 // ---- Translation flow -------------------------------------------------------------------
@@ -445,20 +539,32 @@ void MainWindow::cancelOrStop()
 {
     if (m_translation && (m_translation->isBusy() || m_result->page() == ResultView::Page::Loading)) {
         m_translation->cancel();
+        m_input->setBusy(false);
         if (m_result->hasResult())
-            m_result->showResult(m_result->result());
+            m_result->showResult(m_result->result(), false, false);
         else
             m_result->showEmpty();
         refreshStarFromHistory();
         showStatus(tr("Translation cancelled"));
         return;
     }
-    if (m_speechController->isSpeaking())
+    if (m_speechController->isSpeaking()) {
         m_speechController->stop();
+        return;
+    }
+    if (isHistoryVisible() && m_historyPanel->isAncestorOf(focusWidget())) {
+        setHistoryVisible(false);
+        m_input->focusEditor();
+    }
 }
 
 void MainWindow::showResult(const TranslationResult &result, bool fromHistory)
 {
+    if (result.isValid() && result.request.direction != m_direction) {
+        if (m_settings)
+            m_settings->setDirection(result.request.direction);
+        applyDirection(result.request.direction, true);
+    }
     m_result->showResult(result, fromHistory);
     refreshStarFromHistory();
 }
@@ -469,11 +575,10 @@ void MainWindow::onFinished(const TranslationResult &result)
 {
     showResult(result);
     if (result.fromCache)
-        showStatus(tr("Served from cache - no API call needed"));
-    if (m_settings && m_settings->autoSpeak() && result.isValid()) {
+        showStatus(tr("Served from cache - no API call needed"), QStringLiteral("check"));
+    if (m_settings && m_settings->autoSpeak() && result.isValid())
         m_speechController->speak({result.translation, targetLanguage(result.request.direction)},
                                   m_result->speakButton());
-    }
 }
 
 void MainWindow::onFailed(const TranslationError &error)
@@ -481,7 +586,7 @@ void MainWindow::onFailed(const TranslationError &error)
     if (error.kind == ErrorKind::Cancelled) {
         if (m_result->page() == ResultView::Page::Loading) {
             if (m_result->hasResult())
-                m_result->showResult(m_result->result());
+                m_result->showResult(m_result->result(), false, false);
             else
                 m_result->showEmpty();
         }
@@ -489,7 +594,7 @@ void MainWindow::onFailed(const TranslationError &error)
     }
     showError(error);
     if (error.kind == ErrorKind::NotConfigured)
-        updateWelcomeBanner();
+        updateWelcomeBanner(true);
 }
 
 void MainWindow::restoreHistoryEntry(const HistoryEntry &entry)
@@ -497,16 +602,17 @@ void MainWindow::restoreHistoryEntry(const HistoryEntry &entry)
     if (m_translation && m_translation->isBusy())
         m_translation->cancel();
     const TranslationResult &r = entry.result;
-    m_direction = r.request.direction;
-    if (m_settings)
-        m_settings->setDirection(m_direction);
-    updateDirectionUi();
+    if (r.request.direction != m_direction) {
+        if (m_settings)
+            m_settings->setDirection(r.request.direction);
+        applyDirection(r.request.direction, true);
+    }
     setTone(r.request.tone);
+    motion::crossFade(m_input, motion::kFast);
     m_input->setText(r.request.text);
     m_lastRequest = r.request;
     m_result->showResult(r, true);
     m_result->setStarred(entry.starred);
-    showStatus(tr("Restored from history"));
 }
 
 // ---- Stars ----------------------------------------------------------------------------------
@@ -552,7 +658,8 @@ void MainWindow::onStarToggled(bool starred)
     if (id.isNull())
         id = h->add(m_result->result());
     h->setStarred(id, starred);
-    showStatus(starred ? tr("Starred - find it in History with \"Starred only\"") : tr("Star removed"));
+    showStatus(starred ? tr("Starred - find it in History") : tr("Star removed"),
+               starred ? QStringLiteral("star-filled") : QString());
 }
 
 // ---- Speech ----------------------------------------------------------------------------------
@@ -560,17 +667,17 @@ void MainWindow::onStarToggled(bool starred)
 void MainWindow::onVoiceUnavailable(Language lang)
 {
     if (lang == Language::Cantonese) {
-        if (!m_voiceHintDismissed) {
+        if (!m_voiceHintDismissed && m_voiceHint->isHidden()) {
             QString help = SpeechService::cantoneseVoiceHelpText().toHtmlEscaped();
             help.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
             m_voiceHint->setText(help);
-            m_voiceHint->show();
+            m_voiceHint->animateIn(false);
         } else {
-            showStatus(tr("No Cantonese voice is installed - see Settings ▸ Speech."), 6000);
+            showStatus(tr("No Cantonese voice is installed - see Settings › Speech"), QStringLiteral("warning"));
         }
         return;
     }
-    showStatus(tr("Read-aloud isn't available for English on this computer - see Settings ▸ Speech."), 6000);
+    showStatus(tr("Read-aloud isn't available for English - see Settings › Speech"), QStringLiteral("warning"));
 }
 
 // ---- Settings ----------------------------------------------------------------------------------
@@ -595,40 +702,66 @@ void MainWindow::applySettings()
         return;
     const QString theme = m_settings->theme();
     if (theme != m_appliedTheme) {
+        const bool runtimeChange = !m_appliedTheme.isEmpty();
         m_appliedTheme = theme;
-        if (theme != Theme::mode() || !Theme::isApplied())
+        if (theme != Theme::mode() || !Theme::isApplied()) {
+            if (runtimeChange && isVisible()) {
+                // Cross-fade from a snapshot of the old theme.
+                motion::crossFade(this, motion::kSlow);
+                if (m_settingsDialog && m_settingsDialog->isVisible())
+                    motion::crossFade(m_settingsDialog, motion::kSlow);
+            }
             Theme::apply(theme);
+        }
     }
+    // Only touch what changed: this also runs when tone/direction are saved.
     const int pt = m_settings->fontPointSize();
-    m_input->setTextPointSize(pt);
-    m_input->setScript(m_settings->script());
-    m_result->setTextPointSize(pt);
-    m_result->setDisplayOptions(m_settings->showJyutping(), m_settings->showAlternatives(), m_settings->showNotes());
-    updateProviderBadge();
-    updateWelcomeBanner();
+    const ChineseScript script = m_settings->script();
+    const int display = (m_settings->showJyutping() ? 1 : 0) | (m_settings->showAlternatives() ? 2 : 0)
+                        | (m_settings->showNotes() ? 4 : 0);
+    if (pt != m_appliedFontSize || script != m_appliedScript) {
+        m_appliedFontSize = pt;
+        m_appliedScript = script;
+        m_input->setTextPointSize(pt);
+        m_input->setScript(script);
+        m_result->setTextPointSize(pt);
+    }
+    if (display != m_appliedDisplay) {
+        m_appliedDisplay = display;
+        m_result->setDisplayOptions((display & 1) != 0, (display & 2) != 0, (display & 4) != 0);
+    }
+    updateProviderChip();
+    updateWelcomeBanner(false);
     if (m_translation && m_translation->isActiveProviderConfigured() && !m_settings->firstRunCompleted())
         m_settings->setFirstRunCompleted(true);
 }
 
-void MainWindow::updateProviderBadge()
+QString MainWindow::providerChipText() const { return m_providerChip->text(); }
+
+void MainWindow::updateProviderChip()
 {
+    auto *chip = static_cast<StatusChip *>(m_providerChip);
     const QString id = m_translation ? m_translation->activeProviderId() : QStringLiteral("claude");
     const bool configured = m_translation && m_translation->isActiveProviderConfigured();
     const QString model = m_translation ? m_translation->activeModel() : QString();
+    // The model id already says which provider it is; keep the chip short.
     if (configured) {
-        m_providerBadge->setText(model.isEmpty() ? shortProviderName(id)
-                                                 : QStringLiteral("%1 · %2").arg(shortProviderName(id), model));
-        m_providerBadge->setIcon(ui::icon(QStringLiteral("sparkles"), IconTone::Accent));
-        m_providerBadge->setToolTip(ui::withShortcut(tr("AI provider and model - click to change"), keySettings()));
+        chip->setText(model.isEmpty() ? shortProviderName(id) : model);
+        chip->setToolTip(ui::withShortcut(tr("Translating with %1 · %2 - click to change")
+                                              .arg(shortProviderName(id), model.isEmpty() ? tr("default model") : model),
+                                          keySettings()));
     } else {
-        m_providerBadge->setText(tr("%1 · add API key").arg(shortProviderName(id)));
-        m_providerBadge->setIcon(ui::icon(QStringLiteral("key"), IconTone::Warning));
-        m_providerBadge->setToolTip(tr("No API key yet - click to set one up"));
+        chip->setText(tr("Add API key"));
+        chip->setToolTip(tr("No %1 API key yet - click to set one up").arg(shortProviderName(id)));
     }
-    ui::setStyleProperty(m_providerBadge, "warning", !configured);
+    chip->setAccessibleName(chip->toolTip());
+    chip->setWarning(!configured);
+    chip->updateGeometry();
+    if (QWidget *group = chip->parentWidget())
+        group->updateGeometry();  // HeaderBar re-lays out on LayoutRequest
 }
 
-void MainWindow::updateWelcomeBanner()
+void MainWindow::updateWelcomeBanner(bool animated)
 {
     const bool configured = m_translation && m_translation->isActiveProviderConfigured();
     if (configured || m_welcomeDismissed) {
@@ -636,42 +769,52 @@ void MainWindow::updateWelcomeBanner()
         return;
     }
     const bool firstRun = m_settings && !m_settings->firstRunCompleted();
-    m_welcome->setTitle(firstRun ? tr("Welcome! Let's connect an AI provider")
-                                 : tr("Add an API key to start translating"));
-    m_welcome->setText(
-        tr("Translations are written by Claude or OpenAI using your own API key. Get one in a minute - "
-           "<a href=\"%1\">Claude key</a> or <a href=\"%2\">OpenAI key</a> - then paste it in Settings. "
-           "Your key is stored encrypted on this PC.")
-            .arg(kClaudeKeysUrl, kOpenAiKeysUrl));
-    m_welcome->show();
+    m_welcome->setTitle(firstRun ? tr("Welcome! Connect an AI provider to start") : tr("Add an API key to start translating"));
+    m_welcome->setText(tr("Translations are written by Claude or OpenAI using your own API key. Get one in a minute - "
+                          "<a href=\"%1\">Claude key</a> or <a href=\"%2\">OpenAI key</a> - then paste it in Settings. "
+                          "It's stored encrypted on this PC.")
+                           .arg(kClaudeKeysUrl, kOpenAiKeysUrl));
+    if (m_welcome->isHidden()) {
+        if (animated || !m_firstShow)
+            m_welcome->animateIn(false);
+        else
+            m_welcome->show();
+    }
 }
 
 // ---- Window ------------------------------------------------------------------------------------
 
-void MainWindow::setHistoryVisible(bool visible)
+void MainWindow::setHistoryVisible(bool visible, bool animated)
 {
-    m_historyDock->setVisible(visible);
+    const bool wasOpen = m_historySide->isOpen();
+    m_historySide->setOpen(visible, animated && isVisible());
+    m_historyButton->setChecked(visible);
+    if (visible && !wasOpen) {
+        m_historyPanel->refresh(false);
+        if (animated && isVisible())
+            m_historyPanel->list()->staggerIn();
+    }
+    UiPrefs::instance()->setHistoryVisible(visible);
     if (m_settings)
         m_settings->setHistoryVisible(visible);
+    QTimer::singleShot(motion::ms(motion::kSlow) + 10, this, &MainWindow::updateLayoutForWidth);
 }
 
-bool MainWindow::isHistoryVisible() const { return !m_historyDock->isHidden(); }
+bool MainWindow::isHistoryVisible() const { return m_historySide->isOpen(); }
 
 void MainWindow::showAbout() { ui::showAboutDialog(this); }
 
 void MainWindow::showShortcuts() { ui::showShortcutsDialog(this); }
 
-void MainWindow::showStatus(const QString &message, int timeoutMs)
+void MainWindow::showStatus(const QString &message, const QString &iconName)
 {
-    statusBar()->showMessage(message, timeoutMs);
+    ui::Toast::showMessage(this, message, iconName);
 }
 
 void MainWindow::updateLayoutForWidth()
 {
-    const int w = centralWidget() ? centralWidget()->width() : width();
-    m_splitter->setOrientation(w < 760 ? Qt::Vertical : Qt::Horizontal);
-    m_appTitle->setVisible(width() >= 1180 || (!isHistoryVisible() && width() >= 980));
-    m_toneLabel->setVisible(w >= 900);
+    const int panesWidth = width() - 40 - (isHistoryVisible() ? kHistoryWidth : 0);
+    m_panesLayout->setDirection(panesWidth < 700 ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
 }
 
 void MainWindow::resizeEvent(QResizeEvent *event)
@@ -684,10 +827,14 @@ void MainWindow::showEvent(QShowEvent *event)
 {
     QMainWindow::showEvent(event);
     if (m_firstShow) {
-        m_firstShow = false;
-        m_logo->setPixmap(ui::appLogo(30, devicePixelRatioF()));
+        m_logo->setPixmap(ui::appLogo(28, devicePixelRatioF()));
         m_input->focusEditor();
         QTimer::singleShot(0, this, &MainWindow::updateLayoutForWidth);
+        if (!m_welcome->isHidden()) {
+            m_welcome->hide();
+            QTimer::singleShot(motion::ms(250), this, [this] { m_welcome->animateIn(false); });
+        }
+        m_firstShow = false;
     }
 }
 

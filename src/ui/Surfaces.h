@@ -56,15 +56,15 @@ class ClipBox : public QWidget
 public:
     ClipBox(QWidget *body, QWidget *parent = nullptr);
 
-    int fullHeight(int width) const;
-    void setVisibleHeight(int height);  // -1 = everything
+    int fullHeight(int w) const;
+    void setVisibleHeight(int h);  // -1 = everything
     int visibleHeight() const { return m_visible; }
     void relayout();
 
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
     bool hasHeightForWidth() const override { return true; }
-    int heightForWidth(int width) const override;
+    int heightForWidth(int w) const override;
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -178,7 +178,8 @@ class Toast : public QWidget
     Q_OBJECT
 
 public:
-    static Toast *show(QWidget *window, const QString &text, const QString &iconName = QString(), int msec = 2400);
+    static Toast *showMessage(QWidget *window, const QString &text, const QString &iconName = QString(),
+                              int msec = 2400);
     static Toast *current(QWidget *window);
     QString text() const { return m_text; }
 
@@ -249,7 +250,7 @@ class IconLabel : public QLabel
     Q_OBJECT
 
 public:
-    IconLabel(const QString &iconName, IconTone tone, int size, QWidget *parent = nullptr);
+    IconLabel(const QString &iconName, IconTone tone, int pixelSize, QWidget *parent = nullptr);
     void setIcon(const QString &iconName, IconTone tone);
 
 protected:

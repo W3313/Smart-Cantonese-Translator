@@ -175,7 +175,10 @@ QVariantAnimation *animate(QObject *owner, const QString &key, const QVariant &f
     if (delayMs > 0) {
         if (onValue)
             onValue(from);
-        QTimer::singleShot(delayMs, a, [a] { a->start(QAbstractAnimation::DeleteWhenStopped); });
+        QTimer::singleShot(delayMs, a, [a] {
+            if (!a->objectName().isEmpty())  // cleared by stop()/finish()
+                a->start(QAbstractAnimation::DeleteWhenStopped);
+        });
     } else {
         a->start(QAbstractAnimation::DeleteWhenStopped);
     }

@@ -6,17 +6,11 @@
 #include <QHash>
 #include <QMap>
 
-class QAbstractButton;
-class QButtonGroup;
-class QCheckBox;
 class QComboBox;
-class QDialogButtonBox;
-class QGroupBox;
 class QLabel;
-class QPushButton;
 class QSlider;
 class QStackedWidget;
-class QTabWidget;
+class QVBoxLayout;
 
 namespace sct {
 
@@ -25,12 +19,19 @@ class SpeechService;
 class TranslationService;
 
 namespace ui {
+class Button;
+class Disclosure;
+class IconLabel;
 class PasswordLineEdit;
 class SegmentedControl;
+class ToggleSwitch;
 }
 
-// Preferences: AI provider + keys, translation display, speech, appearance.
-// Changes are written on OK/Apply inside AppSettings::beginBatch()/endBatch().
+class SettingsNav;
+
+// Preferences with a sidebar (AI / Translation / Speech / Appearance).
+// Changes are written on Save/Apply inside AppSettings::beginBatch()/endBatch();
+// "Reduce motion" goes to UiPrefs.
 class SettingsDialog : public QDialog
 {
     Q_OBJECT
@@ -50,24 +51,25 @@ public slots:
 
 protected:
     void accept() override;
+    void keyPressEvent(QKeyEvent *event) override;
 
 private:
     struct ProviderWidgets
     {
         ui::PasswordLineEdit *key = nullptr;
         QComboBox *model = nullptr;
-        QPushButton *test = nullptr;
+        ui::Button *test = nullptr;
         QLabel *status = nullptr;
     };
 
-    QWidget *buildAiTab();
-    QWidget *buildProviderPage(const QString &providerId);
-    QWidget *buildTranslationTab();
-    QWidget *buildSpeechTab();
-    QWidget *buildAppearanceTab();
+    QWidget *buildAiPage();
+    QWidget *buildProviderGroup(const QString &providerId);
+    QWidget *buildTranslationPage();
+    QWidget *buildSpeechPage();
+    QWidget *buildAppearancePage();
     void load();
     void markDirty();
-    void watch(QWidget *w);
+    void watch(QObject *w);
     void setStatus(QLabel *label, const QString &text, const QString &role, const QString &toolTip = QString());
 
     QString selectedProvider() const;
@@ -88,11 +90,14 @@ private:
     bool m_dirty = false;
     bool m_loading = false;
 
-    QTabWidget *m_tabs = nullptr;
-    QDialogButtonBox *m_buttons = nullptr;
+    SettingsNav *m_nav = nullptr;
+    QLabel *m_pageTitle = nullptr;
+    QStackedWidget *m_pages = nullptr;
+    ui::Button *m_apply = nullptr;
+    ui::Button *m_ok = nullptr;
 
     // AI
-    QButtonGroup *m_providerGroup = nullptr;
+    ui::SegmentedControl *m_provider = nullptr;
     QStackedWidget *m_providerStack = nullptr;
     QStringList m_providerIds;
     QHash<QString, ProviderWidgets> m_providerWidgets;
@@ -100,27 +105,28 @@ private:
     QLabel *m_qualityNote = nullptr;
 
     // Translation
-    QButtonGroup *m_scriptGroup = nullptr;
-    QCheckBox *m_showJyutping = nullptr;
-    QCheckBox *m_showAlternatives = nullptr;
-    QCheckBox *m_showNotes = nullptr;
+    ui::SegmentedControl *m_script = nullptr;
+    ui::ToggleSwitch *m_showJyutping = nullptr;
+    ui::ToggleSwitch *m_showAlternatives = nullptr;
+    ui::ToggleSwitch *m_showNotes = nullptr;
 
     // Speech
-    QButtonGroup *m_engineGroup = nullptr;
+    ui::SegmentedControl *m_engine = nullptr;
+    QLabel *m_engineNote = nullptr;
     QStringList m_engineIds;
     QComboBox *m_englishVoice = nullptr;
     QComboBox *m_cantoneseVoice = nullptr;
-    QGroupBox *m_voicesBox = nullptr;
     QSlider *m_rate = nullptr;
     QLabel *m_rateValue = nullptr;
-    QCheckBox *m_autoSpeak = nullptr;
-    QGroupBox *m_azureBox = nullptr;
+    ui::ToggleSwitch *m_autoSpeak = nullptr;
     ui::PasswordLineEdit *m_azureKey = nullptr;
     QComboBox *m_azureRegion = nullptr;
-    QPushButton *m_azureTest = nullptr;
+    ui::Button *m_azureTest = nullptr;
     QLabel *m_azureStatus = nullptr;
+    ui::IconLabel *m_windowsVoiceIcon = nullptr;
     QLabel *m_windowsVoiceStatus = nullptr;
     QLabel *m_windowsVoiceHelp = nullptr;
+    ui::Disclosure *m_windowsVoiceHelpSection = nullptr;
     // engineId -> language -> voice id ("" = automatic)
     QMap<QString, QMap<int, QString>> m_voiceSelection;
 
@@ -129,6 +135,7 @@ private:
     QSlider *m_fontSize = nullptr;
     QLabel *m_fontSizeValue = nullptr;
     QLabel *m_fontPreview = nullptr;
+    ui::ToggleSwitch *m_reduceMotion = nullptr;
 };
 
 } // namespace sct

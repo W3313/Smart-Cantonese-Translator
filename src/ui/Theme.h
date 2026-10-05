@@ -91,8 +91,15 @@ public:
 
     static QString styleSheet(const ThemeColors &c);
 
+    // Windows: dark/light native title bar to match the theme (DWM). No-op
+    // elsewhere. Applied automatically to every window as it is shown.
+    static void applyWindowFrame(QWidget *window);
+
 signals:
     void changed();
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     explicit Theme(QObject *parent = nullptr);

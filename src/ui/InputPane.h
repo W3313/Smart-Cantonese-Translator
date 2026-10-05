@@ -1,26 +1,20 @@
 #pragma once
 
 #include "core/TranslationTypes.h"
-
-#include <QFrame>
+#include "ui/Surfaces.h"
 
 class QLabel;
 class QPlainTextEdit;
-class QPushButton;
 class QTimer;
-class QToolButton;
 
 namespace sct {
 
 class SpeechController;
 
-namespace ui {
-class SpeakButton;
-}
-
-// Left-hand pane: source text editor with character counter, paste/clear,
-// read-aloud and the primary Translate button.
-class InputPane : public QFrame
+// Left card: source text editor, character counter, hover-revealed paste /
+// clear / listen actions and the primary Translate button (which morphs into
+// "Cancel" while a translation runs).
+class InputPane : public ui::Card
 {
     Q_OBJECT
 
@@ -32,19 +26,22 @@ public:
     void setTextPointSize(int pointSize);
     void setScript(ChineseScript script);
     void setSpeechController(SpeechController *controller);
+    void setBusy(bool busy);
+    bool isBusy() const;
 
     QString text() const;
     void setText(const QString &text);
     void focusEditor();
 
     QPlainTextEdit *editor() const { return m_edit; }
-    QPushButton *translateButton() const { return m_translate; }
+    ui::Button *translateButton() const { return m_translate; }
     ui::SpeakButton *speakButton() const { return m_speak; }
     // True while the "looks like Cantonese/English - switch?" hint is shown.
     bool isDirectionHintVisible() const;
 
 signals:
     void translateRequested();
+    void cancelRequested();
     void switchDirectionRequested();
     void cleared();
     void textChanged();
@@ -59,17 +56,15 @@ private:
     ChineseScript m_script = ChineseScript::Traditional;
     int m_pointSize = 13;
 
-    QLabel *m_title = nullptr;
-    ui::SpeakButton *m_speak = nullptr;
     QPlainTextEdit *m_edit = nullptr;
     QWidget *m_hintRow = nullptr;
     QLabel *m_hintText = nullptr;
-    QPushButton *m_hintButton = nullptr;
+    ui::Button *m_hintButton = nullptr;
     QLabel *m_counter = nullptr;
-    QToolButton *m_paste = nullptr;
-    QToolButton *m_clear = nullptr;
-    QLabel *m_shortcutHint = nullptr;
-    QPushButton *m_translate = nullptr;
+    ui::IconButton *m_paste = nullptr;
+    ui::IconButton *m_clear = nullptr;
+    ui::SpeakButton *m_speak = nullptr;
+    ui::Button *m_translate = nullptr;
     QTimer *m_languageCheck = nullptr;
 };
 

@@ -1,7 +1,7 @@
 #include "ui/SpeechController.h"
 
 #include "tts/SpeechService.h"
-#include "ui/Widgets.h"
+#include "ui/Controls.h"
 
 #include <QTimer>
 

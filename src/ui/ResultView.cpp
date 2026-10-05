@@ -1,21 +1,21 @@
 #include "ui/ResultView.h"
 
+#include "ui/Motion.h"
 #include "ui/SpeechController.h"
 #include "ui/Theme.h"
-#include "ui/Widgets.h"
 
 #include <QApplication>
 #include <QClipboard>
-#include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLocale>
 #include <QPainter>
-#include <QPushButton>
+#include <QPainterPath>
+#include <QPointer>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QStackedWidget>
-#include <QToolButton>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace sct {
@@ -24,33 +24,8 @@ using ui::IconTone;
 
 namespace {
 
-// Soft jade disc with 粵 - the empty-state illustration.
-class EmptyGlyph : public QWidget
-{
-public:
-    explicit EmptyGlyph(QWidget *parent = nullptr)
-        : QWidget(parent)
-    {
-        setFixedSize(72, 72);
-    }
-
-protected:
-    void paintEvent(QPaintEvent *) override
-    {
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing);
-        const ThemeColors &c = Theme::colors();
-        p.setPen(Qt::NoPen);
-        p.setBrush(c.accentSoft);
-        p.drawEllipse(rect().adjusted(1, 1, -1, -1));
-        QFont f = Theme::textFont(Language::Cantonese, 10);
-        f.setPixelSize(32);
-        f.setWeight(QFont::DemiBold);
-        p.setFont(f);
-        p.setPen(c.accent);
-        p.drawText(rect(), Qt::AlignCenter, QStringLiteral("粵"));
-    }
-};
+constexpr int kRevealSlide = 14;  // px the result content rises while fading in
+constexpr int kContentTop = 6;
 
 QLabel *makeLabel(const QString &role, QWidget *parent, bool selectable = false)
 {
@@ -66,35 +41,26 @@ QLabel *makeLabel(const QString &role, QWidget *parent, bool selectable = false)
     return l;
 }
 
-QToolButton *makeTextButton(const QString &iconName, const QString &text, const QString &toolTip, QWidget *parent)
-{
-    QToolButton *b = ui::makeIconButton(iconName, toolTip, parent);
-    b->setText(text);
-    b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    return b;
-}
-
-// Scale the headline down for longer texts so short phrases look bold and
-// paragraphs stay readable.
+// Big for short phrases, calmer for paragraphs.
 qreal headlineScale(const QString &text, Language lang)
 {
     const qsizetype n = text.size();
     if (lang == Language::Cantonese)
-        return n <= 30 ? 1.7 : n <= 90 ? 1.4 : n <= 240 ? 1.2 : 1.08;
-    return n <= 50 ? 1.55 : n <= 160 ? 1.3 : n <= 400 ? 1.15 : 1.05;
+        return n <= 24 ? 1.9 : n <= 80 ? 1.6 : n <= 220 ? 1.3 : 1.12;
+    return n <= 40 ? 1.7 : n <= 140 ? 1.42 : n <= 400 ? 1.18 : 1.06;
 }
 
 QString errorTitle(ErrorKind kind)
 {
     switch (kind) {
     case ErrorKind::NotConfigured:
-        return ResultView::tr("Set up an AI provider to start translating");
+        return ResultView::tr("Add an API key to start translating");
     case ErrorKind::Network:
         return ResultView::tr("Can't reach the AI service");
     case ErrorKind::Timeout:
         return ResultView::tr("The request timed out");
     case ErrorKind::Auth:
-        return ResultView::tr("The API key was not accepted");
+        return ResultView::tr("The API key wasn't accepted");
     case ErrorKind::RateLimited:
         return ResultView::tr("Too many requests right now");
     case ErrorKind::Server:
@@ -104,7 +70,7 @@ QString errorTitle(ErrorKind kind)
     case ErrorKind::BadResponse:
         return ResultView::tr("The answer came back garbled");
     case ErrorKind::InvalidRequest:
-        return ResultView::tr("The request was not accepted");
+        return ResultView::tr("The request wasn't accepted");
     case ErrorKind::Cancelled:
         return ResultView::tr("Translation cancelled");
     }
@@ -138,31 +104,65 @@ QString defaultErrorMessage(ErrorKind kind)
     return {};
 }
 
+QString shortProvider(const QString &id)
+{
+    if (id == QLatin1String("claude"))
+        return QStringLiteral("Claude");
+    if (id == QLatin1String("openai"))
+        return QStringLiteral("OpenAI");
+    return id;
+}
+
+// Rounded tinted card for one alternative phrasing.
+class AltCard : public QFrame
+{
+public:
+    explicit AltCard(QWidget *parent)
+        : QFrame(parent)
+    {
+        setAttribute(Qt::WA_Hover);
+    }
+
+protected:
+    bool event(QEvent *e) override
+    {
+        if (e->type() == QEvent::HoverEnter || e->type() == QEvent::HoverLeave) {
+            const bool on = e->type() == QEvent::HoverEnter;
+            motion::animate(this, QStringLiteral("hover"), m_hover, on ? 1.0 : 0.0, motion::kFast,
+                            [this](const QVariant &v) {
+                                m_hover = v.toReal();
+                                update();
+                            });
+        }
+        return QFrame::event(e);
+    }
+
+    void paintEvent(QPaintEvent *) override
+    {
+        const ThemeColors &c = Theme::colors();
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        QPainterPath path;
+        path.addRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 10, 10);
+        p.fillPath(path, c.surfaceAlt);
+        p.setPen(QPen(ui::withAlpha(c.border, m_hover), 1));
+        p.drawPath(path);
+    }
+
+private:
+    qreal m_hover = 0.0;
+};
+
 } // namespace
 
 ResultView::ResultView(QWidget *parent)
-    : QFrame(parent)
+    : ui::Card(parent)
 {
-    setObjectName(QStringLiteral("pane"));
-    setFrameShape(QFrame::NoFrame);
-    setAttribute(Qt::WA_StyledBackground, true);
-
+    setObjectName(QStringLiteral("resultCard"));
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(4, 12, 4, 8);
-    layout->setSpacing(4);
-
-    auto *header = new QHBoxLayout;
-    header->setContentsMargins(16, 0, 14, 0);
-    m_paneTitle = new QLabel(this);
-    m_paneTitle->setProperty("role", QStringLiteral("paneTitle"));
-    m_paneTitle->setFont(Theme::uiFont(-1, QFont::DemiBold));
-    header->addWidget(m_paneTitle);
-    header->addStretch(1);
-    m_badge = new QLabel(this);
-    m_badge->setProperty("role", QStringLiteral("muted"));
-    m_badge->hide();
-    header->addWidget(m_badge);
-    layout->addLayout(header);
+    const QMargins sm = shadowMargins();
+    layout->setContentsMargins(sm.left() + 6, sm.top() + 12, sm.right() + 6, sm.bottom() + 10);
+    layout->setSpacing(0);
 
     m_stack = new QStackedWidget(this);
     m_stack->addWidget(buildEmptyPage());
@@ -184,36 +184,28 @@ QWidget *ResultView::buildEmptyPage()
     page->setObjectName(QStringLiteral("emptyPage"));
     auto *v = new QVBoxLayout(page);
     v->setContentsMargins(24, 16, 24, 24);
-    v->setSpacing(10);
-    v->addStretch(2);
+    v->setSpacing(8);
+    v->addStretch(3);
 
-    auto *glyph = new EmptyGlyph(page);
-    v->addWidget(glyph, 0, Qt::AlignHCenter);
-    v->addSpacing(6);
+    auto *title = new QLabel(tr("Your translation will appear here"), page);
+    title->setObjectName(QStringLiteral("emptyTitle"));
+    title->setProperty("role", QStringLiteral("muted"));
+    title->setAlignment(Qt::AlignCenter);
+    title->setWordWrap(true);
+    title->setFont(Theme::uiFont(13, QFont::DemiBold));
+    v->addWidget(title);
 
-    m_emptyTitle = new QLabel(tr("Your translation will appear here"), page);
-    m_emptyTitle->setAlignment(Qt::AlignCenter);
-    m_emptyTitle->setWordWrap(true);
-    m_emptyTitle->setFont(Theme::uiFont(12, QFont::DemiBold));
-    v->addWidget(m_emptyTitle);
-
-    auto *hint = makeLabel(QStringLiteral("muted"), page);
+    auto *hint = makeLabel(QStringLiteral("caption"), page);
     hint->setAlignment(Qt::AlignCenter);
-    hint->setText(tr("Type or paste text, then press %1. You'll get natural Cantonese with Jyutping, "
-                     "other ways to say it and usage notes.")
-                      .arg(QKeySequence(Qt::CTRL | Qt::Key_Return).toString(QKeySequence::NativeText)));
+    hint->setFont(Theme::uiFont(9.5));
+    hint->setText(tr("Natural Cantonese with Jyutping, other ways to say it and usage notes."));
     v->addWidget(hint);
-    v->addSpacing(8);
-
-    auto *tryLabel = makeLabel(QStringLiteral("caption"), page);
-    tryLabel->setAlignment(Qt::AlignCenter);
-    tryLabel->setText(tr("Try an example"));
-    v->addWidget(tryLabel);
+    v->addSpacing(14);
 
     m_examplesRow = new QHBoxLayout;
     m_examplesRow->setSpacing(8);
     v->addLayout(m_examplesRow);
-    v->addStretch(3);
+    v->addStretch(4);
     return page;
 }
 
@@ -222,25 +214,10 @@ QWidget *ResultView::buildLoadingPage()
     auto *page = new QWidget(this);
     page->setObjectName(QStringLiteral("loadingPage"));
     auto *v = new QVBoxLayout(page);
-    v->addStretch(1);
-    auto *spinner = new ui::BusyIndicator(36, page);
-    v->addWidget(spinner, 0, Qt::AlignHCenter);
-    v->addSpacing(8);
-    auto *label = new QLabel(tr("Translating…"), page);
-    label->setFont(Theme::uiFont(11.5, QFont::DemiBold));
-    label->setAlignment(Qt::AlignCenter);
-    v->addWidget(label);
-    auto *sub = makeLabel(QStringLiteral("muted"), page);
-    sub->setAlignment(Qt::AlignCenter);
-    sub->setText(tr("Finding the most natural way to say it"));
-    v->addWidget(sub);
-    v->addSpacing(8);
-    m_cancel = new QPushButton(tr("Cancel"), page);
-    m_cancel->setToolTip(ui::withShortcut(tr("Cancel translation"), QKeySequence(Qt::Key_Escape)));
-    m_cancel->setCursor(Qt::PointingHandCursor);
-    connect(m_cancel, &QPushButton::clicked, this, &ResultView::cancelRequested);
-    v->addWidget(m_cancel, 0, Qt::AlignHCenter);
-    v->addStretch(2);
+    v->setContentsMargins(16, kContentTop + 6, 16, 12);
+    auto *skeleton = new ui::SkeletonView(page);
+    skeleton->setObjectName(QStringLiteral("skeleton"));
+    v->addWidget(skeleton, 1);
     return page;
 }
 
@@ -250,71 +227,95 @@ QWidget *ResultView::buildResultPage()
     m_scroll->setWidgetResizable(true);
     m_scroll->setFrameShape(QFrame::NoFrame);
     m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_scroll->viewport()->setAutoFillBackground(false);
 
     auto *content = new QWidget(m_scroll);
     content->setObjectName(QStringLiteral("resultContent"));
-    auto *v = new QVBoxLayout(content);
-    v->setContentsMargins(16, 6, 16, 12);
-    v->setSpacing(6);
+    content->setAutoFillBackground(false);
+    m_contentLayout = new QVBoxLayout(content);
+    m_contentLayout->setContentsMargins(16, kContentTop, 16, 8);
+    m_contentLayout->setSpacing(0);
 
     m_translation = makeLabel(QString(), content, true);
     m_translation->setObjectName(QStringLiteral("translationText"));
     m_translation->setAccessibleName(tr("Translation"));
-    v->addWidget(m_translation);
+    m_contentLayout->addWidget(m_translation);
+    m_contentLayout->addSpacing(8);
 
     m_jyutpingCaption = makeLabel(QStringLiteral("caption"), content);
-    m_jyutpingCaption->setText(tr("Jyutping of your text"));
-    v->addWidget(m_jyutpingCaption);
+    m_jyutpingCaption->setText(tr("Pronunciation of your text"));
+    m_contentLayout->addWidget(m_jyutpingCaption);
 
     m_jyutping = makeLabel(QStringLiteral("jyutping"), content, true);
     m_jyutping->setObjectName(QStringLiteral("jyutpingText"));
     m_jyutping->setAccessibleName(tr("Jyutping pronunciation"));
-    v->addWidget(m_jyutping);
+    m_contentLayout->addWidget(m_jyutping);
 
     m_literal = makeLabel(QStringLiteral("muted"), content, true);
     m_literal->setObjectName(QStringLiteral("literalText"));
-    v->addWidget(m_literal);
+    m_literal->setContentsMargins(0, 6, 0, 0);
+    m_contentLayout->addWidget(m_literal);
 
-    v->addSpacing(4);
-    auto *actions = new QHBoxLayout;
+    m_contentLayout->addSpacing(14);
+    m_actions = new QWidget(content);
+    auto *actions = new QHBoxLayout(m_actions);
+    actions->setContentsMargins(0, 0, 0, 0);
     actions->setSpacing(4);
-    m_speak = new ui::SpeakButton(content, true);
+    m_speak = new ui::SpeakButton(m_actions, true);
+    m_speak->setObjectName(QStringLiteral("speakResultButton"));
     m_speak->setIdleToolTip(ui::withShortcut(tr("Listen"), QKeySequence(Qt::CTRL | Qt::Key_R)));
     actions->addWidget(m_speak);
-    m_copy = makeTextButton(QStringLiteral("copy"), tr("Copy"),
-                            ui::withShortcut(tr("Copy translation"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C)),
-                            content);
-    connect(m_copy, &QToolButton::clicked, this, &ResultView::copyTranslation);
+    m_copy = new ui::IconButton(QStringLiteral("copy"),
+                                ui::withShortcut(tr("Copy translation"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C)),
+                                m_actions);
+    m_copy->setObjectName(QStringLiteral("copyButton"));
+    m_copy->setText(tr("Copy"));
+    connect(m_copy, &QAbstractButton::clicked, this, [this] {
+        copyTranslation();
+        flashCopied(m_copy);
+    });
     actions->addWidget(m_copy);
-    m_copyJyutping = ui::makeIconButton(QStringLiteral("copy-jyutping"), tr("Copy with Jyutping"), content);
-    connect(m_copyJyutping, &QToolButton::clicked, this, &ResultView::copyWithJyutping);
+    m_copyJyutping = new ui::IconButton(QStringLiteral("copy-jyutping"), tr("Copy with Jyutping"), m_actions,
+                                        IconTone::Muted);
+    m_copyJyutping->setObjectName(QStringLiteral("copyJyutpingButton"));
+    connect(m_copyJyutping, &QAbstractButton::clicked, this, [this] {
+        copyWithJyutping();
+        flashCopied(m_copyJyutping);
+    });
     actions->addWidget(m_copyJyutping);
-    m_star = ui::makeIconButton(QStringLiteral("star"), tr("Star - keep in history"), content);
+    m_star = new ui::IconButton(QStringLiteral("star"), tr("Star"), m_actions, IconTone::Muted);
     m_star->setObjectName(QStringLiteral("starButton"));
     m_star->setCheckable(true);
-    connect(m_star, &QToolButton::toggled, this, [this](bool on) {
+    m_star->setCheckedBackground(false);
+    connect(m_star, &QAbstractButton::toggled, this, [this](bool on) {
         updateStarButton();
         emit starToggled(on);
     });
     actions->addWidget(m_star);
     actions->addStretch(1);
-    v->addLayout(actions);
+    addRevealWidget(m_copyJyutping);
+    addRevealWidget(m_star);
+    m_contentLayout->addWidget(m_actions);
 
-    m_altSection = new ui::CollapsibleSection(tr("Other ways to say it"), QStringLiteral("sparkles"), content);
-    v->addSpacing(6);
-    v->addWidget(m_altSection);
+    m_contentLayout->addSpacing(14);
+    m_altSection = new ui::Disclosure(content);
+    m_altSection->setObjectName(QStringLiteral("alternativesSection"));
+    m_contentLayout->addWidget(m_altSection);
+    m_notesSection = new ui::Disclosure(content);
+    m_notesSection->setObjectName(QStringLiteral("notesSection"));
+    m_contentLayout->addWidget(m_notesSection);
+    connect(m_altSection, &ui::Disclosure::expandedChanged, this, [this](bool on) { m_altExpanded = on; });
+    connect(m_notesSection, &ui::Disclosure::expandedChanged, this, [this](bool on) { m_notesExpanded = on; });
 
-    m_notesSection = new ui::CollapsibleSection(tr("Notes"), QStringLiteral("bulb"), content);
-    v->addSpacing(2);
-    v->addWidget(m_notesSection);
-
-    v->addStretch(1);
+    m_contentLayout->addStretch(1);
     m_footer = makeLabel(QStringLiteral("caption"), content);
     m_footer->setObjectName(QStringLiteral("resultFooter"));
-    v->addSpacing(8);
-    v->addWidget(m_footer);
+    m_footer->setFont(Theme::uiFont(8.5));
+    m_footer->setContentsMargins(0, 12, 0, 0);
+    m_contentLayout->addWidget(m_footer);
 
     m_scroll->setWidget(content);
+    content->setAutoFillBackground(false);  // setWidget() switches it on
     return m_scroll;
 }
 
@@ -323,7 +324,7 @@ QWidget *ResultView::buildErrorPage()
     auto *page = new QWidget(this);
     page->setObjectName(QStringLiteral("errorPage"));
     auto *v = new QVBoxLayout(page);
-    v->setContentsMargins(14, 8, 14, 14);
+    v->setContentsMargins(10, 10, 10, 10);
     m_errorBanner = new ui::Banner(ui::Banner::Kind::Error, page);
     m_errorBanner->setObjectName(QStringLiteral("errorBanner"));
     v->addWidget(m_errorBanner);
@@ -335,8 +336,6 @@ void ResultView::setPage(Page page)
 {
     m_page = page;
     m_stack->setCurrentIndex(int(page));
-    if (page != Page::Result)
-        m_badge->hide();
 }
 
 // ---- Public API --------------------------------------------------------------------
@@ -355,7 +354,6 @@ void ResultView::setSpeechController(SpeechController *controller)
 void ResultView::setDirection(Direction direction)
 {
     m_direction = direction;
-    m_paneTitle->setText(Theme::languageLabel(targetLanguage(direction)));
     rebuildExamples();
 }
 
@@ -376,12 +374,15 @@ void ResultView::setTextPointSize(int pointSize)
 void ResultView::showEmpty()
 {
     m_result = TranslationResult();
-    setPage(Page::Empty);
+    if (m_page != Page::Empty) {
+        motion::crossFade(m_stack, motion::kNormal);
+        setPage(Page::Empty);
+    }
 }
 
 void ResultView::showLoading() { setPage(Page::Loading); }
 
-void ResultView::showResult(const TranslationResult &result, bool fromHistory)
+void ResultView::showResult(const TranslationResult &result, bool fromHistory, bool animated)
 {
     m_result = result;
     m_fromHistory = fromHistory;
@@ -389,15 +390,10 @@ void ResultView::showResult(const TranslationResult &result, bool fromHistory)
         showEmpty();
         return;
     }
-    m_paneTitle->setText(Theme::languageLabel(targetLanguage(result.request.direction)));
-
     m_translation->setText(result.translation.trimmed());
     m_jyutping->setText(result.jyutping.trimmed());
-    m_literal->setText(result.literal.trimmed().isEmpty()
-                           ? QString()
-                           : tr("Literally: %1").arg(result.literal.trimmed()));
-    m_jyutpingCaption->setVisible(false);
-
+    m_literal->setText(result.literal.trimmed().isEmpty() ? QString()
+                                                          : tr("Literally: %1").arg(result.literal.trimmed()));
     {
         const QSignalBlocker block(m_star);
         m_star->setChecked(false);
@@ -410,10 +406,32 @@ void ResultView::showResult(const TranslationResult &result, bool fromHistory)
     applyVisibility();
     m_scroll->verticalScrollBar()->setValue(0);
     setPage(Page::Result);
+    if (animated)
+        reveal();
+}
 
-    if (result.fromCache || fromHistory) {
-        m_badge->setText(fromHistory ? tr("From history") : tr("From cache"));
-        m_badge->show();
+void ResultView::reveal()
+{
+    if (motion::reduced())
+        return;
+    // Content rises a little while the pieces fade in one after another.
+    QPointer<QVBoxLayout> layout(m_contentLayout);
+    motion::animate(
+        m_scroll, QStringLiteral("rise"), kContentTop + kRevealSlide, kContentTop, motion::kSlow,
+        [layout](const QVariant &v) {
+            if (layout) {
+                const QMargins m = layout->contentsMargins();
+                layout->setContentsMargins(m.left(), v.toInt(), m.right(), m.bottom());
+            }
+        });
+    const QList<QWidget *> pieces = {m_translation, m_jyutpingCaption, m_jyutping, m_literal,
+                                     m_actions,     m_altSection,      m_notesSection, m_footer};
+    int delay = 0;
+    for (QWidget *w : pieces) {
+        if (w->isHidden())
+            continue;
+        motion::fadeIn(w, motion::kSlow, delay);
+        delay += (w == m_translation) ? 80 : 45;
     }
 }
 
@@ -431,9 +449,9 @@ void ResultView::showError(const TranslationError &error)
     case ErrorKind::NotConfigured:
     case ErrorKind::Auth:
     case ErrorKind::InvalidRequest: {
-        QPushButton *b = m_errorBanner->addButton(tr("Open Settings"), true);
+        ui::Button *b = m_errorBanner->addButton(tr("Open Settings"), true);
         b->setObjectName(QStringLiteral("openSettingsButton"));
-        connect(b, &QPushButton::clicked, this, &ResultView::openSettingsRequested);
+        connect(b, &QAbstractButton::clicked, this, &ResultView::openSettingsRequested);
         break;
     }
     case ErrorKind::RateLimited:
@@ -441,18 +459,18 @@ void ResultView::showError(const TranslationError &error)
     case ErrorKind::Network:
     case ErrorKind::Timeout:
     case ErrorKind::BadResponse: {
-        QPushButton *b = m_errorBanner->addButton(tr("Retry"), true);
+        ui::Button *b = m_errorBanner->addButton(tr("Retry"), true);
         b->setObjectName(QStringLiteral("retryButton"));
-        b->setIcon(ui::icon(QStringLiteral("retry"), IconTone::OnAccent));
-        connect(b, &QPushButton::clicked, this, &ResultView::retryRequested);
+        connect(b, &QAbstractButton::clicked, this, &ResultView::retryRequested);
         break;
     }
     case ErrorKind::Refused:
     case ErrorKind::Cancelled:
         break;
     }
-    m_errorBanner->show();
     setPage(Page::Error);
+    // Only real failures shake; "set up a key" is guidance, not an error.
+    m_errorBanner->animateIn(error.kind != ErrorKind::NotConfigured);
 }
 
 void ResultView::setStarred(bool starred)
@@ -475,7 +493,7 @@ void ResultView::copyTranslation()
     if (!m_result.isValid())
         return;
     QApplication::clipboard()->setText(m_result.translation.trimmed());
-    emit statusMessage(tr("Copied translation"));
+    emit statusMessage(tr("Copied translation"), QStringLiteral("check"));
 }
 
 void ResultView::copyWithJyutping()
@@ -483,14 +501,28 @@ void ResultView::copyWithJyutping()
     if (!m_result.isValid())
         return;
     QStringList parts;
-    if (m_result.request.direction == Direction::CantoneseToEnglish) {
+    if (m_result.request.direction == Direction::CantoneseToEnglish)
         parts << m_result.request.text.trimmed() << m_result.jyutping.trimmed() << m_result.translation.trimmed();
-    } else {
+    else
         parts << m_result.translation.trimmed() << m_result.jyutping.trimmed();
-    }
     parts.removeAll(QString());
     QApplication::clipboard()->setText(parts.join(QLatin1Char('\n')));
-    emit statusMessage(tr("Copied with Jyutping"));
+    emit statusMessage(tr("Copied with Jyutping"), QStringLiteral("check"));
+}
+
+// Briefly swap a copy button's icon for a check mark.
+void ResultView::flashCopied(ui::IconButton *button)
+{
+    const QString original = button->iconName();
+    if (original == QLatin1String("check"))
+        return;
+    const IconTone tone = button == m_copy ? IconTone::Text : IconTone::Muted;
+    button->setIconName(QStringLiteral("check"), IconTone::Success);
+    QPointer<ui::IconButton> guard(button);
+    QTimer::singleShot(1300, button, [guard, original, tone] {
+        if (guard)
+            guard->setIconName(original, tone);
+    });
 }
 
 // ---- Internals ---------------------------------------------------------------------
@@ -510,12 +542,12 @@ void ResultView::rebuildExamples()
     const Language src = sourceLanguage(m_direction);
     m_examplesRow->addStretch(1);
     for (const QString &text : examples) {
-        auto *b = new QPushButton(text, m_examplesRow->parentWidget());
-        b->setProperty("chip", true);
-        b->setCursor(Qt::PointingHandCursor);
-        b->setFont(Theme::textFont(src, 10.5));
-        b->setFocusPolicy(Qt::TabFocus);
-        connect(b, &QPushButton::clicked, this, [this, text] { emit exampleChosen(text); });
+        auto *b = new ui::Button(text, ui::Button::Variant::Secondary, m_stack->widget(int(Page::Empty)));
+        QFont f = Theme::textFont(src, 9.5);
+        f.setWeight(QFont::Normal);
+        b->setFont(f);
+        b->setToolTip(tr("Translate this example"));
+        connect(b, &QAbstractButton::clicked, this, [this, text] { emit exampleChosen(text); });
         m_examplesRow->addWidget(b);
         m_exampleButtons.append(b);
     }
@@ -529,58 +561,65 @@ void ResultView::rebuildAlternatives()
     m_altCards.clear();
     m_altTextLabels.clear();
     m_altJyutpingLabels.clear();
+    m_altNoteLabels.clear();
 
     const Language target = targetLanguage(m_result.request.direction);
     for (const Alternative &alt : m_result.alternatives) {
-        if (alt.text.trimmed().isEmpty())
+        const QString altText = alt.text.trimmed();
+        if (altText.isEmpty())
             continue;
-        auto *card = new QFrame(m_altSection->content());
+        auto *card = new AltCard(m_altSection->body());
         card->setObjectName(QStringLiteral("altCard"));
-        card->setAttribute(Qt::WA_StyledBackground, true);
         auto *h = new QHBoxLayout(card);
         h->setContentsMargins(14, 10, 8, 10);
-        h->setSpacing(8);
+        h->setSpacing(6);
 
         auto *texts = new QVBoxLayout;
         texts->setSpacing(2);
         QLabel *text = makeLabel(QString(), card, true);
-        text->setText(alt.text.trimmed());
+        text->setText(altText);
         texts->addWidget(text);
         m_altTextLabels.append(text);
         QLabel *jp = makeLabel(QStringLiteral("jyutping"), card, true);
         jp->setText(alt.jyutping.trimmed());
-        jp->setVisible(!alt.jyutping.trimmed().isEmpty());
+        jp->setVisible(!alt.jyutping.trimmed().isEmpty() && m_showJyutping);
         texts->addWidget(jp);
         m_altJyutpingLabels.append(jp);
         if (!alt.note.trimmed().isEmpty()) {
             QLabel *note = makeLabel(QStringLiteral("muted"), card, true);
             note->setText(alt.note.trimmed());
-            texts->addSpacing(2);
+            note->setContentsMargins(0, 4, 0, 0);
             texts->addWidget(note);
+            m_altNoteLabels.append(note);
         }
         h->addLayout(texts, 1);
 
         auto *speak = new ui::SpeakButton(card);
         speak->setIdleToolTip(tr("Listen to this one"));
-        if (m_speech) {
-            const QString altText = alt.text.trimmed();
+        if (m_speech)
             m_speech->attach(speak, [altText, target] { return SpeechController::Utterance{altText, target}; });
-        } else {
+        else
             speak->setEnabled(false);
-        }
         h->addWidget(speak, 0, Qt::AlignTop);
-        QToolButton *copy = ui::makeIconButton(QStringLiteral("copy"), tr("Copy"), card);
-        const QString altText = alt.text.trimmed();
-        connect(copy, &QToolButton::clicked, this, [this, altText] {
+        auto *copy = new ui::IconButton(QStringLiteral("copy"), tr("Copy"), card, IconTone::Muted);
+        connect(copy, &QAbstractButton::clicked, this, [this, altText, copy] {
             QApplication::clipboard()->setText(altText);
-            emit statusMessage(tr("Copied"));
+            emit statusMessage(tr("Copied"), QStringLiteral("check"));
+            flashCopied(copy);
         });
         h->addWidget(copy, 0, Qt::AlignTop);
 
         layout->addWidget(card);
         m_altCards.append(card);
     }
-    m_altSection->setCount(int(m_altCards.size()));
+    const int n = int(m_altCards.size());
+    m_altSection->setTitle(n == 1 ? tr("1 other way to say it") : tr("%1 other ways to say it").arg(n));
+    {
+        const bool keep = m_altExpanded;  // setExpanded() reports back through expandedChanged
+        m_altSection->setExpanded(keep, false);
+        m_altExpanded = keep;
+    }
+    m_altSection->contentChanged();
 }
 
 void ResultView::rebuildNotes()
@@ -592,14 +631,13 @@ void ResultView::rebuildNotes()
         delete item->widget();
         delete item;
     }
-
     for (const QString &note : m_result.notes) {
         if (note.trimmed().isEmpty())
             continue;
-        auto *row = new QWidget(m_notesSection->content());
+        auto *row = new QWidget(m_notesSection->body());
         auto *h = new QHBoxLayout(row);
-        h->setContentsMargins(4, 0, 0, 0);
-        h->setSpacing(8);
+        h->setContentsMargins(8, 0, 0, 0);
+        h->setSpacing(10);
         auto *bullet = new QLabel(QStringLiteral("•"), row);
         bullet->setProperty("role", QStringLiteral("jyutping"));
         h->addWidget(bullet, 0, Qt::AlignTop);
@@ -609,7 +647,14 @@ void ResultView::rebuildNotes()
         layout->addWidget(row);
         m_noteLabels.append(text);
     }
-    m_notesSection->setCount(int(m_noteLabels.size()));
+    const int n = int(m_noteLabels.size());
+    m_notesSection->setTitle(n == 1 ? tr("1 usage note") : tr("%1 usage notes").arg(n));
+    {
+        const bool keep = m_notesExpanded;
+        m_notesSection->setExpanded(keep, false);
+        m_notesExpanded = keep;
+    }
+    m_notesSection->contentChanged();
 }
 
 void ResultView::applyFonts()
@@ -617,23 +662,22 @@ void ResultView::applyFonts()
     const Language target = targetLanguage(m_result.isValid() ? m_result.request.direction : m_direction);
     const ChineseScript script = m_result.request.script;
     const qreal base = m_pointSize;
-    m_translation->setFont(
-        Theme::textFont(target, base * headlineScale(m_translation->text(), target), script));
+    QFont headline = Theme::textFont(target, base * headlineScale(m_translation->text(), target), script);
+    headline.setWeight(target == Language::Cantonese ? QFont::Medium : QFont::Normal);
+    m_translation->setFont(headline);
     m_jyutping->setFont(Theme::jyutpingFont(base * 0.95));
-    m_literal->setFont(Theme::uiFont(base * 0.88));
-    m_jyutpingCaption->setFont(Theme::uiFont(base * 0.75));
+    m_literal->setFont(Theme::uiFont(base * 0.8));
+    m_jyutpingCaption->setFont(Theme::uiFont(base * 0.68));
     for (QLabel *l : std::as_const(m_altTextLabels))
         l->setFont(Theme::textFont(target, base * 1.12, script));
     for (QLabel *l : std::as_const(m_altJyutpingLabels))
-        l->setFont(Theme::jyutpingFont(base * 0.85));
+        l->setFont(Theme::jyutpingFont(base * 0.82));
+    for (QLabel *l : std::as_const(m_altNoteLabels))
+        l->setFont(Theme::uiFont(base * 0.74));
     for (QLabel *l : std::as_const(m_noteLabels))
-        l->setFont(Theme::textFont(Language::English, base * 0.9, script));
-    for (QWidget *card : std::as_const(m_altCards)) {
-        for (QLabel *l : card->findChildren<QLabel *>()) {
-            if (l->property("role").toString() == QLatin1String("muted"))
-                l->setFont(Theme::uiFont(base * 0.82));
-        }
-    }
+        l->setFont(Theme::uiFont(base * 0.8));
+    m_altSection->contentChanged();
+    m_notesSection->contentChanged();
 }
 
 void ResultView::applyVisibility()
@@ -644,39 +688,37 @@ void ResultView::applyVisibility()
     m_jyutpingCaption->setVisible(m_showJyutping && hasJyutping && yueSource);
     m_copyJyutping->setVisible(m_showJyutping && hasJyutping);
     m_literal->setVisible(!m_literal->text().isEmpty());
+    for (QLabel *jp : std::as_const(m_altJyutpingLabels))
+        jp->setVisible(m_showJyutping && !jp->text().isEmpty());
     m_altSection->setVisible(m_showAlternatives && !m_altCards.isEmpty());
     m_notesSection->setVisible(m_showNotes && !m_noteLabels.isEmpty());
+    m_altSection->contentChanged();
 }
 
 void ResultView::updateStarButton()
 {
     const bool on = m_star->isChecked();
-    m_star->setIcon(ui::icon(on ? QStringLiteral("star-filled") : QStringLiteral("star"),
-                             on ? IconTone::Star : IconTone::Text));
-    m_star->setToolTip(on ? tr("Starred - click to unstar") : tr("Star - keep in history"));
+    m_star->setIconName(on ? QStringLiteral("star-filled") : QStringLiteral("star"),
+                        on ? IconTone::Star : IconTone::Muted);
+    m_star->setPinned(on);
+    m_star->setToolTip(on ? tr("Starred - click to unstar") : tr("Star - keep it at the top of your history"));
+    m_star->setAccessibleName(on ? tr("Unstar") : tr("Star"));
 }
 
 void ResultView::updateFooter()
 {
-    QString provider = m_result.providerId;
-    if (provider == QLatin1String("claude"))
-        provider = QStringLiteral("Claude");
-    else if (provider == QLatin1String("openai"))
-        provider = QStringLiteral("OpenAI");
     QStringList parts;
+    const QString provider = shortProvider(m_result.providerId);
     if (!provider.isEmpty())
         parts << (m_result.model.isEmpty() ? provider : QStringLiteral("%1 · %2").arg(provider, m_result.model));
-    if (m_result.timestamp.isValid() && m_fromHistory)
+    if (m_fromHistory && m_result.timestamp.isValid())
         parts << QLocale().toString(m_result.timestamp.toLocalTime(), QLocale::ShortFormat);
-    m_footer->setText(parts.isEmpty() ? QString() : tr("Translated by %1").arg(parts.join(QStringLiteral(" · "))));
+    if (m_fromHistory)
+        parts << tr("from history");
+    else if (m_result.fromCache)
+        parts << tr("from cache");
+    m_footer->setText(parts.join(QStringLiteral("  ·  ")));
     m_footer->setVisible(!parts.isEmpty());
-}
-
-void ResultView::changeEvent(QEvent *event)
-{
-    QFrame::changeEvent(event);
-    if (event->type() == QEvent::PaletteChange)
-        updateStarButton();
 }
 
 } // namespace sct

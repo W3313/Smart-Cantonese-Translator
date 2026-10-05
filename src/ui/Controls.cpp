@@ -217,7 +217,7 @@ void IconButton::paintEvent(QPaintEvent *)
     p.translate(r.center());
     p.scale(scale, scale);
     p.translate(-r.center());
-    if (isChecked())
+    if (isChecked() && m_checkedBackground)
         fillRounded(&p, r, radius, c.accentSoft);
     fillRounded(&p, r, radius, withAlpha(c.hover, hoverProgress()));
     fillRounded(&p, r, radius, withAlpha(c.pressed, pressProgress() * 0.6));
@@ -440,24 +440,42 @@ void SegmentedControl::setSegmentFont(const QFont &font)
     updateGeometry();
 }
 
-int SegmentedControl::segmentWidth() const
+void SegmentedControl::setEqualWidths(bool equal)
 {
+    m_equalWidths = equal;
+    updateGeometry();
+    update();
+}
+
+int SegmentedControl::segmentWidth(int index) const
+{
+    if (!m_equalWidths)
+        return fontMetrics().horizontalAdvance(m_segments.value(index).text) + 28;
     int w = 0;
     for (const Segment &s : m_segments)
         w = qMax(w, fontMetrics().horizontalAdvance(s.text));
     return w + 28;
 }
 
+int SegmentedControl::totalWidth() const
+{
+    int w = 0;
+    for (int i = 0; i < m_segments.size(); ++i)
+        w += segmentWidth(i);
+    return w;
+}
+
 QSize SegmentedControl::sizeHint() const
 {
-    return QSize(int(m_segments.size()) * segmentWidth() + 8, qMax(34, fontMetrics().height() + 16));
+    return QSize(totalWidth() + 8, qMax(36, fontMetrics().height() + 16));
 }
 
 QRect SegmentedControl::segmentRect(int index) const
 {
-    const int segW = segmentWidth();
-    const int x0 = (width() - segW * int(m_segments.size())) / 2;
-    return QRect(x0 + index * segW, 4, segW, height() - 8);
+    int x = (width() - totalWidth()) / 2;
+    for (int i = 0; i < index; ++i)
+        x += segmentWidth(i);
+    return QRect(x, 4, segmentWidth(index), height() - 8);
 }
 
 int SegmentedControl::segmentAt(const QPoint &pos) const
@@ -703,6 +721,8 @@ void SpeakButton::refresh()
         break;
     }
     setAccessibleName(m_state == State::Idle ? m_idleToolTip.section(QStringLiteral("  ("), 0, 0) : toolTip());
+    // Stay visible while active even inside a card that hides secondary actions.
+    setPinned(m_state != State::Idle);
     if (m_state != State::Idle && !motion::reduced())
         m_ticker->start();
     else
@@ -790,17 +810,17 @@ int DirectionPill::labelWidth() const
            + 28;
 }
 
-QSize DirectionPill::sizeHint() const { return QSize(2 * labelWidth() + 40, qMax(38, fontMetrics().height() + 18)); }
+QSize DirectionPill::sizeHint() const { return QSize(2 * labelWidth() + 40, qMax(36, fontMetrics().height() + 14)); }
 
 void DirectionPill::setDirection(Direction direction, bool animated)
 {
+    setAccessibleName(tr("%1 to %2 - swap languages")
+                          .arg(Theme::languageLabel(sourceLanguage(direction)),
+                               Theme::languageLabel(targetLanguage(direction))));
     if (direction == m_direction && !animated)
         return;
     m_previous = m_direction;
     m_direction = direction;
-    setAccessibleName(tr("%1 to %2 - swap languages")
-                          .arg(Theme::languageLabel(sourceLanguage(direction)),
-                               Theme::languageLabel(targetLanguage(direction))));
     if (!animated || !isVisible()) {
         motion::stop(this, QStringLiteral("swap"));
         m_swapProgress = 1.0;

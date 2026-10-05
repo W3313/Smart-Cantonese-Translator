@@ -1,19 +1,17 @@
 #include "ui/InputPane.h"
 
+#include "ui/Motion.h"
 #include "ui/SpeechController.h"
 #include "ui/Theme.h"
-#include "ui/Widgets.h"
 
 #include <QApplication>
 #include <QClipboard>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPlainTextEdit>
-#include <QPushButton>
 #include <QRegularExpression>
 #include <QTextCursor>
 #include <QTimer>
-#include <QToolButton>
 #include <QVBoxLayout>
 
 namespace sct {
@@ -27,29 +25,16 @@ constexpr int kSoftLimit = 5000;
 } // namespace
 
 InputPane::InputPane(QWidget *parent)
-    : QFrame(parent)
+    : ui::Card(parent)
     , m_languageCheck(new QTimer(this))
 {
-    setObjectName(QStringLiteral("pane"));
-    setFrameShape(QFrame::NoFrame);
-    setAttribute(Qt::WA_StyledBackground, true);
+    setObjectName(QStringLiteral("inputCard"));
+    setFocusHighlight(true);
 
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(4, 12, 12, 12);
-    layout->setSpacing(4);
-
-    auto *header = new QHBoxLayout;
-    header->setContentsMargins(16, 0, 0, 0);
-    m_title = new QLabel(this);
-    m_title->setProperty("role", QStringLiteral("paneTitle"));
-    m_title->setFont(Theme::uiFont(-1, QFont::DemiBold));
-    header->addWidget(m_title);
-    header->addStretch(1);
-    m_speak = new ui::SpeakButton(this);
-    m_speak->setIdleToolTip(tr("Listen to your text"));
-    m_speak->setEnabled(false);
-    header->addWidget(m_speak);
-    layout->addLayout(header);
+    const QMargins sm = shadowMargins();
+    layout->setContentsMargins(sm.left() + 8, sm.top() + 10, sm.right() + 14, sm.bottom() + 12);
+    layout->setSpacing(6);
 
     m_edit = new QPlainTextEdit(this);
     m_edit->setObjectName(QStringLiteral("sourceEdit"));
@@ -57,38 +42,40 @@ InputPane::InputPane(QWidget *parent)
     m_edit->setTabChangesFocus(true);
     m_edit->setAccessibleName(tr("Text to translate"));
     m_edit->document()->setDocumentMargin(12);
+    m_edit->viewport()->setAutoFillBackground(false);
+    m_edit->setAutoFillBackground(false);
     layout->addWidget(m_edit, 1);
 
-    // "Looks like Cantonese - switch?" hint.
+    // "This looks like Chinese - translate from Cantonese instead"
     m_hintRow = new QWidget(this);
     auto *hint = new QHBoxLayout(m_hintRow);
-    hint->setContentsMargins(16, 0, 0, 0);
+    hint->setContentsMargins(12, 0, 0, 0);
     hint->setSpacing(6);
     hint->addWidget(new ui::IconLabel(QStringLiteral("info"), IconTone::Accent, 16, m_hintRow));
     m_hintText = new QLabel(m_hintRow);
-    m_hintText->setObjectName(QStringLiteral("directionHint"));
-    hint->addWidget(m_hintText);
-    m_hintButton = new QPushButton(m_hintRow);
-    m_hintButton->setProperty("link", true);
-    m_hintButton->setCursor(Qt::PointingHandCursor);
-    m_hintButton->setFlat(true);
-    connect(m_hintButton, &QPushButton::clicked, this, &InputPane::switchDirectionRequested);
+    m_hintText->setProperty("role", QStringLiteral("muted"));
+    m_hintText->setWordWrap(true);
+    hint->addWidget(m_hintText, 1);
+    m_hintButton = new ui::Button(QString(), ui::Button::Variant::Ghost, m_hintRow);
+    m_hintButton->setObjectName(QStringLiteral("directionHintButton"));
+    connect(m_hintButton, &QAbstractButton::clicked, this, &InputPane::switchDirectionRequested);
     hint->addWidget(m_hintButton);
-    hint->addStretch(1);
     m_hintRow->hide();
     layout->addWidget(m_hintRow);
 
     auto *bottom = new QHBoxLayout;
-    bottom->setContentsMargins(16, 4, 0, 0);
-    bottom->setSpacing(4);
+    bottom->setContentsMargins(12, 0, 0, 0);
+    bottom->setSpacing(2);
     m_counter = new QLabel(this);
     m_counter->setObjectName(QStringLiteral("charCounter"));
     m_counter->setProperty("role", QStringLiteral("muted"));
+    m_counter->setFont(Theme::uiFont(9));
     bottom->addWidget(m_counter);
     bottom->addStretch(1);
 
-    m_paste = ui::makeIconButton(QStringLiteral("paste"), tr("Paste"), this);
-    connect(m_paste, &QToolButton::clicked, this, [this] {
+    m_paste = new ui::IconButton(QStringLiteral("paste"), tr("Paste"), this, IconTone::Muted);
+    m_paste->setObjectName(QStringLiteral("pasteButton"));
+    connect(m_paste, &QAbstractButton::clicked, this, [this] {
         const QString clip = QApplication::clipboard()->text();
         if (clip.isEmpty())
             return;
@@ -97,37 +84,44 @@ InputPane::InputPane(QWidget *parent)
     });
     bottom->addWidget(m_paste);
 
-    m_clear = ui::makeIconButton(QStringLiteral("clear"), tr("Clear"), this);
-    connect(m_clear, &QToolButton::clicked, this, [this] {
+    m_clear = new ui::IconButton(QStringLiteral("clear"), tr("Clear"), this, IconTone::Muted);
+    m_clear->setObjectName(QStringLiteral("clearButton"));
+    connect(m_clear, &QAbstractButton::clicked, this, [this] {
+        motion::crossFade(m_edit, motion::kFast);
         m_edit->clear();
         m_edit->setFocus();
         emit cleared();
     });
     bottom->addWidget(m_clear);
-    bottom->addSpacing(8);
+
+    m_speak = new ui::SpeakButton(this);
+    m_speak->setObjectName(QStringLiteral("speakInputButton"));
+    m_speak->setIdleToolTip(tr("Listen to your text"));
+    m_speak->setEnabled(false);
+    bottom->addWidget(m_speak);
+    bottom->addSpacing(10);
+
+    for (ui::IconButton *b : {static_cast<ui::IconButton *>(m_paste), static_cast<ui::IconButton *>(m_clear),
+                              static_cast<ui::IconButton *>(m_speak)})
+        addRevealWidget(b);
 
     const QKeySequence translateKey(Qt::CTRL | Qt::Key_Return);
-    m_shortcutHint = new QLabel(translateKey.toString(QKeySequence::NativeText), this);
-    m_shortcutHint->setProperty("role", QStringLiteral("caption"));
-    m_shortcutHint->setFont(Theme::uiFont(8.5));
-    bottom->addWidget(m_shortcutHint);
-    bottom->addSpacing(4);
-
-    m_translate = new QPushButton(tr("Translate"), this);
+    m_translate = new ui::Button(tr("Translate"), ui::Button::Variant::Primary, this);
     m_translate->setObjectName(QStringLiteral("translateButton"));
-    m_translate->setProperty("primary", true);
-    m_translate->setIcon(ui::icon(QStringLiteral("translate"), IconTone::OnAccent));
-    m_translate->setIconSize(QSize(18, 18));
-    m_translate->setLayoutDirection(Qt::RightToLeft);  // arrow after the label
-    m_translate->setCursor(Qt::PointingHandCursor);
-    m_translate->setFont(Theme::uiFont(10.5, QFont::DemiBold));
+    m_translate->setTrailingIcon(QStringLiteral("translate"));
+    m_translate->setBusy(false, tr("Cancel"));
     m_translate->setToolTip(ui::withShortcut(tr("Translate"), translateKey));
-    connect(m_translate, &QPushButton::clicked, this, &InputPane::translateRequested);
+    connect(m_translate, &QAbstractButton::clicked, this, [this] {
+        if (m_translate->isBusy())
+            emit cancelRequested();
+        else
+            emit translateRequested();
+    });
     bottom->addWidget(m_translate);
     layout->addLayout(bottom);
 
     m_languageCheck->setSingleShot(true);
-    m_languageCheck->setInterval(350);
+    m_languageCheck->setInterval(400);
     connect(m_languageCheck, &QTimer::timeout, this, &InputPane::checkLanguage);
     connect(m_edit, &QPlainTextEdit::textChanged, this, [this] {
         updateCounter();
@@ -144,7 +138,6 @@ InputPane::InputPane(QWidget *parent)
 void InputPane::setDirection(Direction direction)
 {
     m_direction = direction;
-    m_title->setText(Theme::languageLabel(sourceLanguage(direction)));
     updatePlaceholder();
     updateFont();
     checkLanguage();
@@ -172,6 +165,16 @@ void InputPane::setSpeechController(SpeechController *controller)
     }
 }
 
+void InputPane::setBusy(bool busy)
+{
+    m_translate->setBusy(busy, tr("Cancel"));
+    m_translate->setToolTip(busy ? ui::withShortcut(tr("Cancel translation"), QKeySequence(Qt::Key_Escape))
+                                 : ui::withShortcut(tr("Translate"), QKeySequence(Qt::CTRL | Qt::Key_Return)));
+    m_translate->setAccessibleName(busy ? tr("Cancel translation") : tr("Translate"));
+}
+
+bool InputPane::isBusy() const { return m_translate->isBusy(); }
+
 QString InputPane::text() const { return m_edit->toPlainText(); }
 
 void InputPane::setText(const QString &text)
@@ -189,9 +192,9 @@ bool InputPane::isDirectionHintVisible() const { return !m_hintRow->isHidden(); 
 void InputPane::updateCounter()
 {
     const qsizetype n = m_edit->toPlainText().size();
-    m_counter->setText(n == 1 ? tr("1 character") : tr("%L1 characters").arg(n));
+    m_counter->setText(n == 0 ? QString() : n == 1 ? tr("1 character") : tr("%L1 characters").arg(n));
     const bool over = n > kSoftLimit;
-    ui::setStyleProperty(m_counter, "over", over);
+    ui::setStyleProperty(m_counter, "role", over ? QStringLiteral("warning") : QStringLiteral("muted"));
     m_counter->setToolTip(over ? tr("Long texts take longer and cost more to translate.") : QString());
     m_clear->setEnabled(n > 0);
 }
@@ -200,12 +203,12 @@ void InputPane::updatePlaceholder()
 {
     m_edit->setPlaceholderText(m_direction == Direction::EnglishToCantonese
                                    ? tr("Type or paste English…")
-                                   : QStringLiteral("輸入廣東話…  ") + tr("(type or paste Cantonese)"));
+                                   : QStringLiteral("輸入廣東話…  ") + tr("Type or paste Cantonese"));
 }
 
 void InputPane::updateFont()
 {
-    m_edit->setFont(Theme::textFont(sourceLanguage(m_direction), m_pointSize * 1.08, m_script));
+    m_edit->setFont(Theme::textFont(sourceLanguage(m_direction), m_pointSize * 1.15, m_script));
 }
 
 void InputPane::checkLanguage()
@@ -221,22 +224,31 @@ void InputPane::checkLanguage()
     }
     bool show = false;
     if (m_direction == Direction::EnglishToCantonese && han >= 2 && han > latin) {
-        m_hintText->setText(tr("This looks like Chinese."));
-        m_hintButton->setText(tr("Translate from Cantonese instead"));
+        m_hintText->setText(tr("This looks like Cantonese."));
+        m_hintButton->setText(tr("Switch languages"));
+        m_hintButton->setToolTip(tr("Translate from Cantonese to English instead"));
         show = true;
     } else if (m_direction == Direction::CantoneseToEnglish && han == 0 && latin >= 8) {
         // Jyutping input ("nei5 hou2") is fine as Cantonese.
         static const QRegularExpression jyutping(QStringLiteral("\\b[a-z]+[1-6]\\b"),
                                                  QRegularExpression::CaseInsensitiveOption);
+        static const QRegularExpression spaces(QStringLiteral("\\s+"));
         const qsizetype syllables = text.count(jyutping);
-        const qsizetype words = text.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts).size();
+        const qsizetype words = text.split(spaces, Qt::SkipEmptyParts).size();
         if (syllables * 2 < words) {
             m_hintText->setText(tr("This looks like English."));
-            m_hintButton->setText(tr("Translate from English instead"));
+            m_hintButton->setText(tr("Switch languages"));
+            m_hintButton->setToolTip(tr("Translate from English to Cantonese instead"));
             show = true;
         }
     }
-    m_hintRow->setVisible(show);
+    m_hintButton->updateGeometry();
+    if (show && m_hintRow->isHidden()) {
+        m_hintRow->show();
+        motion::fadeIn(m_hintRow, motion::kNormal);
+    } else if (!show) {
+        m_hintRow->hide();
+    }
 }
 
 } // namespace sct
