@@ -172,6 +172,64 @@ private slots:
         QVERIFY(outputConfig.contains(QStringLiteral("format")));
     }
 
+    void requestVariants()
+    {
+        const QString model = QStringLiteral("claude-sonnet-4-5");
+        auto body = [&](int variant) {
+            return QJsonDocument::fromJson(
+                       ClaudeApi::buildMessagesBody(sampleRequest(), model, QStringLiteral("best"), variant))
+                .object();
+        };
+        const QJsonObject normal = body(ClaudeApi::Normal);
+        QVERIFY(normal.value(QStringLiteral("output_config")).toObject().contains(QStringLiteral("effort")));
+
+        const QJsonObject noEffort = body(ClaudeApi::NoEffort);
+        QVERIFY(!noEffort.value(QStringLiteral("output_config")).toObject().contains(QStringLiteral("effort")));
+        QVERIFY(noEffort.value(QStringLiteral("output_config")).toObject().contains(QStringLiteral("format")));
+        QCOMPARE(noEffort.value(QStringLiteral("system")), normal.value(QStringLiteral("system")));
+
+        const QJsonObject noFormat = body(ClaudeApi::NoStructuredOutput);
+        QVERIFY(!noFormat.value(QStringLiteral("output_config")).toObject().contains(QStringLiteral("format")));
+        QVERIFY(noFormat.value(QStringLiteral("system")).toString().contains(
+            QString::fromUtf8(PromptBuilder::responseSchemaJson())));
+
+        const QJsonObject neither = body(ClaudeApi::NoEffort | ClaudeApi::NoStructuredOutput);
+        QVERIFY(!neither.contains(QStringLiteral("output_config")));
+    }
+
+    void fallbackVariants()
+    {
+        auto apiError = [](const QString &message) {
+            QJsonObject error;
+            error.insert(QStringLiteral("type"), QStringLiteral("invalid_request_error"));
+            error.insert(QStringLiteral("message"), message);
+            QJsonObject root;
+            root.insert(QStringLiteral("type"), QStringLiteral("error"));
+            root.insert(QStringLiteral("error"), error);
+            return QJsonDocument(root).toJson(QJsonDocument::Compact);
+        };
+        const QString sonnet45 = QStringLiteral("claude-sonnet-4-5");
+        const QByteArray effort = apiError(QStringLiteral("output_config.effort: This model does not support effort."));
+        const QByteArray format = apiError(QStringLiteral("output_config.format: Structured outputs are not supported."));
+
+        QCOMPARE(ClaudeApi::fallbackVariant(httpResult(400, effort), sonnet45, ClaudeApi::Normal),
+                 int(ClaudeApi::NoEffort));
+        QCOMPARE(ClaudeApi::fallbackVariant(httpResult(400, format), sonnet45, ClaudeApi::NoEffort),
+                 int(ClaudeApi::NoEffort | ClaudeApi::NoStructuredOutput));
+        QCOMPARE(ClaudeApi::fallbackVariant(httpResult(400, format), sonnet45,
+                                            ClaudeApi::NoEffort | ClaudeApi::NoStructuredOutput),
+                 -1);
+        // Effort is never sent to Haiku, so dropping it cannot help.
+        QCOMPARE(ClaudeApi::fallbackVariant(httpResult(400, apiError(QStringLiteral("effort is not supported"))),
+                                            QStringLiteral("claude-haiku-4-5"), ClaudeApi::Normal),
+                 -1);
+        QCOMPARE(ClaudeApi::fallbackVariant(httpResult(400, apiError(QStringLiteral("model: claude-nope"))), sonnet45,
+                                            ClaudeApi::Normal),
+                 -1);
+        QCOMPARE(ClaudeApi::fallbackVariant(httpResult(404, effort), sonnet45, ClaudeApi::Normal), -1);
+        QCOMPARE(ClaudeApi::fallbackVariant(httpResult(500, effort), sonnet45, ClaudeApi::Normal), -1);
+    }
+
     void fallbacks_data()
     {
         QTest::addColumn<QString>("model");

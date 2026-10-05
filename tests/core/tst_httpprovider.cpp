@@ -223,6 +223,26 @@ private slots:
         QVERIFY(!req.headers.contains("anthropic-beta"));  // not a fallback-capable model
     }
 
+    void claudeOlderModelRetriesWithoutEffort()
+    {
+        // e.g. a model picked from /v1/models that predates the effort parameter.
+        m_server->enqueue(MockResponse::json(400, R"({"type":"error","error":{"type":"invalid_request_error","message":"output_config.effort: not supported for this model"}})"));
+        m_server->enqueue(MockResponse::json(200, kClaudeOk));
+        auto p = makeProvider<ClaudeProvider>();
+        p->setModel(QStringLiteral("claude-sonnet-4-5"));
+        QSignalSpy finished(p.get(), &TranslationProvider::finished);
+        QSignalSpy failed(p.get(), &TranslationProvider::failed);
+        p->translate(sampleRequest());
+        QVERIFY(finished.wait(5000));
+        QCOMPARE(failed.count(), 0);
+        QCOMPARE(m_server->requests().size(), 2);
+        const QJsonObject first = QJsonDocument::fromJson(m_server->requests().at(0).body).object();
+        const QJsonObject second = QJsonDocument::fromJson(m_server->requests().at(1).body).object();
+        QVERIFY(first.value(QStringLiteral("output_config")).toObject().contains(QStringLiteral("effort")));
+        QVERIFY(!second.value(QStringLiteral("output_config")).toObject().contains(QStringLiteral("effort")));
+        QVERIFY(second.value(QStringLiteral("output_config")).toObject().contains(QStringLiteral("format")));
+    }
+
     void refusalFromServer()
     {
         m_server->enqueue(MockResponse::json(200, R"({"type":"message","content":[],"stop_reason":"refusal"})"));

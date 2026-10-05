@@ -135,6 +135,15 @@ QString sanitizeSourceText(const QString &text)
     static const QRegularExpression tag(QStringLiteral("<\\s*(/?)\\s*source_text\\s*>"),
                                         QRegularExpression::CaseInsensitiveOption);
     QString s = text;
+    // QRegularExpression never matches in invalid UTF-16, so a single unpaired
+    // surrogate (e.g. from a broken paste) would switch the escaping below
+    // off. The API would receive U+FFFD for it anyway.
+    for (qsizetype i = 0; i < s.size(); ++i) {
+        if (s.at(i).isHighSurrogate() && i + 1 < s.size() && s.at(i + 1).isLowSurrogate())
+            ++i;
+        else if (s.at(i).isSurrogate())
+            s[i] = QChar(QChar::ReplacementCharacter);
+    }
     s.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
     s.replace(QLatin1Char('\r'), QLatin1Char('\n'));
     s.replace(tag, QStringLiteral("[\\1source_text]"));

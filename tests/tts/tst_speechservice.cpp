@@ -271,6 +271,24 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!service.isSpeaking(), WaitMs);
     }
 
+    void interruptedAzureTestIsReported()
+    {
+        FakeAzureServer server;
+        server.hang = true;
+        SpeechService service(m_settings.get(), nullptr);
+        azureOf(service)->setEndpointOverride(server.url());
+        QSignalSpy finished(&service, &SpeechService::azureTestFinished);
+
+        service.testAzure(QStringLiteral("typed-key"), QStringLiteral("eastasia"), QString());
+        QTRY_COMPARE_WITH_TIMEOUT(server.requests.size(), 1, WaitMs);
+        // e.g. auto-speak after a translation while the Settings test waits.
+        service.speak(QStringLiteral("Hello"), Language::English);
+        QCOMPARE(finished.size(), 1);
+        QCOMPARE(finished.first().first().toBool(), false);
+        service.stop();
+        QCOMPARE(finished.size(), 1);  // reported once
+    }
+
     void stopAndDestroyWhileLoading()
     {
         FakeAzureServer server;

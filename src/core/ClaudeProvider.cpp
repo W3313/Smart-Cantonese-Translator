@@ -83,18 +83,26 @@ bool supportsServerSideFallback(const QString &model)
     return models.contains(model.trimmed());
 }
 
-QByteArray buildMessagesBody(const TranslationRequest &request, const QString &model, const QString &quality)
+QByteArray buildMessagesBody(const TranslationRequest &request, const QString &model, const QString &quality,
+                             int variant)
 {
     const PromptBuilder::Prompt prompt = PromptBuilder::build(request);
-
-    QJsonObject format;
-    format.insert(QStringLiteral("type"), QStringLiteral("json_schema"));
-    format.insert(QStringLiteral("schema"), PromptBuilder::schemaPlaceholder());
+    QString system = prompt.system;
 
     QJsonObject outputConfig;
-    if (supportsEffort(model))
+    if (supportsEffort(model) && !(variant & NoEffort))
         outputConfig.insert(QStringLiteral("effort"), effortForQuality(quality));
-    outputConfig.insert(QStringLiteral("format"), format);
+    if (variant & NoStructuredOutput) {
+        // Model without structured outputs: spell the schema out instead
+        // (ResponseParser tolerates fences and prose around the JSON).
+        system += QStringLiteral("\nThe JSON object must follow this JSON schema exactly:\n")
+                  + QString::fromUtf8(PromptBuilder::responseSchemaJson()) + QLatin1Char('\n');
+    } else {
+        QJsonObject format;
+        format.insert(QStringLiteral("type"), QStringLiteral("json_schema"));
+        format.insert(QStringLiteral("schema"), PromptBuilder::schemaPlaceholder());
+        outputConfig.insert(QStringLiteral("format"), format);
+    }
 
     QJsonObject userMessage;
     userMessage.insert(QStringLiteral("role"), QStringLiteral("user"));
@@ -103,9 +111,10 @@ QByteArray buildMessagesBody(const TranslationRequest &request, const QString &m
     QJsonObject body;
     body.insert(QStringLiteral("model"), model);
     body.insert(QStringLiteral("max_tokens"), maxTokens());
-    body.insert(QStringLiteral("system"), prompt.system);
+    body.insert(QStringLiteral("system"), system);
     body.insert(QStringLiteral("messages"), QJsonArray{userMessage});
-    body.insert(QStringLiteral("output_config"), outputConfig);
+    if (!outputConfig.isEmpty())
+        body.insert(QStringLiteral("output_config"), outputConfig);
     if (supportsServerSideFallback(model))
         body.insert(QStringLiteral("fallbacks"), QStringLiteral("default"));
     // Deliberately no temperature/top_p/top_k, no "thinking" field and no
@@ -205,6 +214,20 @@ TranslationError mapError(const HttpResult &result)
     return e;
 }
 
+int fallbackVariant(const HttpResult &result, const QString &model, int variant)
+{
+    if (result.status != 400)
+        return -1;
+    const QString message = errorMessage(result.body).toLower();
+    if (!(variant & NoEffort) && supportsEffort(model) && message.contains(QLatin1String("effort")))
+        return variant | NoEffort;
+    if (!(variant & NoStructuredOutput)
+        && (message.contains(QLatin1String("output_config")) || message.contains(QLatin1String("format"))
+            || message.contains(QLatin1String("schema")) || message.contains(QLatin1String("structured"))))
+        return variant | NoStructuredOutput;
+    return -1;
+}
+
 QStringList parseModelList(const QByteArray &body, QString *errorDetail)
 {
     bool ok = false;
@@ -264,13 +287,13 @@ QString ClaudeProvider::shortName() const
     return QStringLiteral("Claude");
 }
 
-HttpCall ClaudeProvider::translateCall(const TranslationRequest &request, int) const
+HttpCall ClaudeProvider::translateCall(const TranslationRequest &request, int variant) const
 {
     HttpCall call;
     call.verb = QByteArrayLiteral("POST");
     call.path = ClaudeApi::messagesPath();
     call.headers = ClaudeApi::messagesHeaders(apiKey(), model());
-    call.body = ClaudeApi::buildMessagesBody(request, model(), quality());
+    call.body = ClaudeApi::buildMessagesBody(request, model(), quality(), variant);
     return call;
 }
 
@@ -297,6 +320,11 @@ QStringList ClaudeProvider::parseModelList(const QByteArray &body, QString *erro
 TranslationError ClaudeProvider::errorFor(const HttpResult &result) const
 {
     return ClaudeApi::mapError(result);
+}
+
+int ClaudeProvider::fallbackVariant(const HttpResult &result, int variant) const
+{
+    return ClaudeApi::fallbackVariant(result, model(), variant);
 }
 
 } // namespace sct

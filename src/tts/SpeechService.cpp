@@ -137,6 +137,9 @@ void SpeechService::speak(const QString &text, Language lang)
 
 void SpeechService::stop()
 {
+    // A Settings "Test" still waiting for Azure (e.g. interrupted by auto-speak
+    // after a translation) must still get its answer.
+    const bool testInterrupted = m_testingAzure && azureEngine()->isTestRunning();
     m_testingAzure = false;
     m_current = nullptr;
     // Stop idle engines too: the system engine reports Idle once it gave up
@@ -144,6 +147,8 @@ void SpeechService::stop()
     for (SpeechEngine *e : {m_system, m_azure})
         e->stop();
     updateFlags();
+    if (testInterrupted)
+        emit azureTestFinished(false, tr("The test was interrupted. Please try again."));
 }
 
 void SpeechService::onEngineError(SpeechEngine *source, const QString &message)

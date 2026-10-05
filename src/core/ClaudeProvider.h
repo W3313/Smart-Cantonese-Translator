@@ -22,8 +22,20 @@ bool supportsEffort(const QString &model);
 // Models that accept "fallbacks": "default" (with the beta header).
 bool supportsServerSideFallback(const QString &model);
 
+// Request fallbacks, used after the API rejects a parameter for a model (e.g.
+// an older model picked from the /v1/models list).
+enum Variant : int {
+    Normal = 0,
+    NoEffort = 1,            // omit output_config.effort
+    NoStructuredOutput = 2,  // omit output_config.format; the schema goes into the prompt
+};
+
 // JSON body for POST /v1/messages (property order of the schema preserved).
-QByteArray buildMessagesBody(const TranslationRequest &request, const QString &model, const QString &quality);
+QByteArray buildMessagesBody(const TranslationRequest &request, const QString &model, const QString &quality,
+                             int variant = Normal);
+// Next request variant to try after `result` (a failed attempt with
+// `variant`), or -1.
+int fallbackVariant(const HttpResult &result, const QString &model, int variant);
 // Headers for /v1/messages; the beta header is only added for models that
 // support server-side fallbacks.
 HttpHeaders messagesHeaders(const QString &apiKey, const QString &model);
@@ -66,6 +78,7 @@ protected:
                                              const TranslationRequest &request) const override;
     QStringList parseModelList(const QByteArray &body, QString *errorDetail) const override;
     TranslationError errorFor(const HttpResult &result) const override;
+    int fallbackVariant(const HttpResult &result, int variant) const override;
 };
 
 } // namespace sct
