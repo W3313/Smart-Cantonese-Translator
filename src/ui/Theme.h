@@ -7,6 +7,8 @@
 #include <QObject>
 #include <QString>
 
+class QPainter;
+class QRectF;
 class QWidget;
 
 namespace sct {
@@ -116,6 +118,10 @@ QColor mix(const QColor &a, const QColor &b, qreal t);
 
 // Same colour with its alpha multiplied by factor.
 QColor withAlpha(const QColor &c, qreal factor);
+
+// Soft drop shadow under a rounded rect: a few translucent layers, much
+// cheaper than QGraphicsDropShadowEffect. strength 1.0 = card shadow.
+void paintSoftShadow(QPainter *p, const QRectF &rect, qreal radius, qreal strength = 1.0);
 
 } // namespace ui
 

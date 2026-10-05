@@ -2,6 +2,8 @@
 
 #include <QApplication>
 #include <QGuiApplication>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPalette>
 #include <QSettings>
 #include <QStyle>
@@ -630,6 +632,26 @@ QColor mix(const QColor &a, const QColor &b, qreal t)
     t = qBound(0.0, t, 1.0);
     return QColor::fromRgbF(a.redF() + (b.redF() - a.redF()) * t, a.greenF() + (b.greenF() - a.greenF()) * t,
                             a.blueF() + (b.blueF() - a.blueF()) * t, a.alphaF() + (b.alphaF() - a.alphaF()) * t);
+}
+
+void paintSoftShadow(QPainter *p, const QRectF &r, qreal radius, qreal strength)
+{
+    if (strength <= 0)
+        return;
+    const QColor base = Theme::colors().shadow;
+    const qreal k = Theme::colors().dark ? 2.2 : 1.0;  // dark surfaces need a stronger shadow to read
+    p->save();
+    p->setRenderHint(QPainter::Antialiasing);
+    p->setPen(Qt::NoPen);
+    for (int i = 4; i >= 1; --i) {
+        QColor c = base;
+        c.setAlphaF(qMin(1.0, strength * k * 0.035 / i));
+        QPainterPath path;
+        const QRectF layer = r.adjusted(-i * 0.6, i * 0.5, i * 0.6, i * 1.2);
+        path.addRoundedRect(layer, radius + i * 0.6, radius + i * 0.6);
+        p->fillPath(path, c);
+    }
+    p->restore();
 }
 
 QColor withAlpha(const QColor &c, qreal factor)

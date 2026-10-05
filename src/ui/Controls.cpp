@@ -37,18 +37,6 @@ void fillRounded(QPainter *p, const QRectF &r, qreal radius, const QColor &color
     p->fillPath(path, color);
 }
 
-// Soft drop shadow under a rounded rect (a few translucent layers; far cheaper
-// than QGraphicsDropShadowEffect).
-void paintSoftShadow(QPainter *p, const QRectF &r, qreal radius, qreal strength)
-{
-    const QColor base = Theme::colors().shadow;
-    for (int i = 3; i >= 1; --i) {
-        QColor c = base;
-        c.setAlphaF(strength * (0.05 / i));
-        fillRounded(p, r.adjusted(-i * 0.5, i * 0.6, i * 0.5, i * 1.1), radius + i * 0.5, c);
-    }
-}
-
 } // namespace
 
 QString withShortcut(const QString &text, const QKeySequence &shortcut)
