@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Application manifest for SmartCantoneseTranslator.exe.
+  Added as a source of the executable in src/app/CMakeLists.txt; the MSVC linker merges it
+  with the manifest it generates itself. The linker already emits the <trustInfo> block
+  (requestedExecutionLevel asInvoker), so it is intentionally not repeated here.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0"
+          xmlns:asmv3="urn:schemas-microsoft-com:asm.v3">
+
+  <!-- Windows 10 and Windows 11 (same GUID). -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+
+  <asmv3:application>
+    <asmv3:windowsSettings>
+      <!-- Per-monitor v2 DPI awareness (matches Qt 6's default, so Qt keeps it as is). -->
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2, PerMonitor</dpiAwareness>
+      <!-- Make the ANSI code page UTF-8 (Windows 10 1903+), so any narrow-string Win32/CRT
+           call handles Chinese text correctly. -->
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+      <!-- Allow paths longer than MAX_PATH where the OS policy permits it. -->
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </asmv3:windowsSettings>
+  </asmv3:application>
+
+  <!-- Common Controls v6 (themed native controls in native dialogs). -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0"
+                        processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>
+    </dependentAssembly>
+  </dependency>
+</assembly>

@@ -1,0 +1,268 @@
+# Builds, tests and packages the Windows app.
+#
+# Every run uploads two downloadable artifacts:
+#   SmartCantoneseTranslator-Setup-<version>.exe              (installer)
+#   SmartCantoneseTranslator-<version>-win64-portable.zip      (unzip and run)
+# Pushing a tag v<version> (matching project(VERSION) in CMakeLists.txt) also
+# publishes both files as a GitHub Release.
+
+name: Windows build
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  # Qt 6.8 LTS: 6.8.3 is the last 6.8 patch release published for open-source
+  # users (6.8.4+ are commercial-only), so it is what aqtinstall can download.
+  QT_VERSION: '6.8.3'
+  QT_ARCH: win64_msvc2022_64
+  # Qt Svg and the Qt tools ship in the base package; these are the add-ons.
+  QT_MODULES: qtmultimedia qtspeech
+  BUILD_DIR: build
+  STAGE_DIR: stage\SmartCantoneseTranslator
+  DIST_DIR: dist
+
+jobs:
+  windows:
+    name: Build, test & package (win64)
+    # Visual Studio 2022 image: matches the MSVC 2022 toolchain Qt 6.8 is built with.
+    # (windows-latest now carries Visual Studio 2026.)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      - name: Determine version
+        id: version
+        run: |
+          $cmake = Get-Content -Raw CMakeLists.txt
+          if ($cmake -notmatch '(?s)project\s*\(\s*SmartCantoneseTranslator\b.*?\bVERSION\s+(\d+\.\d+\.\d+)') {
+            throw 'Could not find project(... VERSION x.y.z) in CMakeLists.txt'
+          }
+          $version = $Matches[1]
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
+            if ($tagVersion -ne $version) {
+              throw "Tag $env:GITHUB_REF_NAME does not match the CMake project version $version. Update project(VERSION) in CMakeLists.txt, then tag v$version."
+            }
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $version"
+
+      - name: Install Qt ${{ env.QT_VERSION }}
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: windows
+          target: desktop
+          arch: ${{ env.QT_ARCH }}
+          modules: ${{ env.QT_MODULES }}
+          cache: true
+
+      - name: Set up MSVC (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Ensure Ninja
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            choco install ninja -y --no-progress
+          }
+          ninja --version
+          cmake --version
+
+      - name: Configure
+        run: >
+          cmake -S . -B $env:BUILD_DIR -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DSCT_BUILD_TESTS=ON
+          -DQT_ENABLE_VERBOSE_DEPLOYMENT=ON
+
+      - name: Build
+        run: cmake --build $env:BUILD_DIR --parallel
+
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir $env:BUILD_DIR --output-on-failure --timeout 300
+
+      - name: Install & deploy Qt runtime (windeployqt)
+        run: |
+          $prefix = (Join-Path $env:GITHUB_WORKSPACE $env:STAGE_DIR) -replace '\\', '/'
+          cmake --install $env:BUILD_DIR --prefix $prefix
+          if ($LASTEXITCODE -ne 0) { throw "cmake --install failed ($LASTEXITCODE)" }
+
+      - name: Verify deployment
+        run: |
+          $stage = Join-Path $env:GITHUB_WORKSPACE $env:STAGE_DIR
+          Write-Host "Staged files:"
+          Get-ChildItem -Recurse -File $stage |
+            ForEach-Object { '{0,12:N0}  {1}' -f $_.Length, $_.FullName.Substring($stage.Length + 1) }
+          Write-Host "`nqt.conf:"; Get-Content (Join-Path $stage 'qt.conf')
+
+          $required = @(
+            'SmartCantoneseTranslator.exe', 'qt.conf',
+            'Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll', 'Qt6Network.dll', 'Qt6Svg.dll',
+            'Qt6TextToSpeech.dll', 'Qt6Multimedia.dll',
+            'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll',
+            'avcodec-*.dll', 'avformat-*.dll', 'avutil-*.dll', 'swresample-*.dll', 'swscale-*.dll',
+            'plugins\platforms\qwindows.dll',
+            'plugins\styles\*.dll',
+            'plugins\imageformats\qsvg.dll',
+            'plugins\iconengines\qsvgicon.dll',
+            'plugins\tls\qschannelbackend.dll',
+            'plugins\networkinformation\*.dll',
+            'plugins\texttospeech\qtexttospeech_winrt.dll',
+            'plugins\texttospeech\qtexttospeech_sapi.dll',
+            'plugins\multimedia\ffmpegmediaplugin.dll',
+            'THIRD_PARTY_NOTICES.md', 'licenses\LGPL-3.0-only.txt'
+          )
+          $missing = $required | Where-Object { -not (Test-Path (Join-Path $stage $_)) }
+          if ($missing) {
+            $missing | ForEach-Object { Write-Host "::error title=Deployment incomplete::Missing $_" }
+            throw "Deployment is missing $($missing.Count) required file(s)."
+          }
+          foreach ($optional in 'plugins\multimedia\windowsmediaplugin.dll') {
+            if (-not (Test-Path (Join-Path $stage $optional))) { Write-Host "::warning::Not deployed: $optional" }
+          }
+          if (Test-Path (Join-Path $stage 'plugins\texttospeech\qtexttospeech_mock.dll')) {
+            Write-Host '::warning::The test-only qtexttospeech_mock.dll was deployed.'
+          }
+          $size = (Get-ChildItem -Recurse -File $stage | Measure-Object Length -Sum).Sum / 1MB
+          Write-Host ('All required files present. Total size: {0:N1} MB' -f $size)
+
+      - name: Smoke test (starts without Qt on PATH)
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE "$env:STAGE_DIR\SmartCantoneseTranslator.exe"
+          # Only Windows itself on PATH and no Qt env vars: every DLL and plugin
+          # must come from the deployed folder, exactly as on a user's PC.
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\Wbem"
+          foreach ($v in 'QT_PLUGIN_PATH', 'QML2_IMPORT_PATH', 'QT_QPA_PLATFORM', 'QT_ROOT_DIR', 'Qt6_DIR') {
+            Remove-Item "Env:$v" -ErrorAction SilentlyContinue
+          }
+          $p = Start-Process -FilePath $exe -PassThru
+          $null = $p.Handle   # keep the handle so ExitCode is available later
+          Start-Sleep -Seconds 15
+          if ($p.HasExited) {
+            $code = '0x{0:X8}' -f $p.ExitCode
+            if ($p.ExitCode -ne 0) { throw "The app exited after start-up with code $code (0xC0000135 = missing DLL)." }
+            Write-Host "The app exited by itself with code 0."
+          } else {
+            Write-Host "The app is running after 15 s - OK."
+            Stop-Process -Id $p.Id -Force
+          }
+
+      - name: Create portable zip
+        id: zip
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          New-Item -ItemType Directory -Force $env:DIST_DIR | Out-Null
+          $zip = Join-Path $env:GITHUB_WORKSPACE "$env:DIST_DIR\SmartCantoneseTranslator-$version-win64-portable.zip"
+          # The zip contains a single SmartCantoneseTranslator\ folder.
+          Push-Location (Split-Path (Join-Path $env:GITHUB_WORKSPACE $env:STAGE_DIR) -Parent)
+          7z a -tzip -mx=9 $zip SmartCantoneseTranslator | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw '7z failed' }
+          Pop-Location
+          "path=$zip" >> $env:GITHUB_OUTPUT
+
+      - name: Build installer (Inno Setup)
+        id: installer
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $iscc = (Get-Command iscc.exe -ErrorAction SilentlyContinue).Source
+          $candidates = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe")
+          if (-not $iscc) { $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1 }
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+            $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $iscc) { throw 'Inno Setup (ISCC.exe) not found' }
+          Write-Host "Using $iscc"
+          $stage = Join-Path $env:GITHUB_WORKSPACE $env:STAGE_DIR
+          $dist = Join-Path $env:GITHUB_WORKSPACE $env:DIST_DIR
+          & $iscc "/DAppVersion=$version" "/DStageDir=$stage" "/DOutputDir=$dist" packaging\windows\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          $setup = Join-Path $dist "SmartCantoneseTranslator-Setup-$version.exe"
+          if (-not (Test-Path $setup)) { throw "Installer not found: $setup" }
+          "path=$setup" >> $env:GITHUB_OUTPUT
+
+      # archive: false uploads the file as-is, so the Actions page offers the
+      # .exe / .zip directly instead of wrapping each in another zip.
+      - name: Upload installer
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.installer.outputs.path }}
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload portable zip
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.zip.outputs.path }}
+          archive: false
+          if-no-files-found: error
+
+      - name: Summary
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          @"
+          ### Smart Cantonese Translator $version for Windows
+          Download from the **Artifacts** list on this run's summary page:
+          - ``SmartCantoneseTranslator-Setup-$version.exe`` - installer (recommended)
+          - ``SmartCantoneseTranslator-$version-win64-portable.zip`` - portable, unzip and run ``SmartCantoneseTranslator.exe``
+
+          Built with Qt $env:QT_VERSION ($env:QT_ARCH).
+          "@ >> $env:GITHUB_STEP_SUMMARY
+
+  release:
+    name: Publish GitHub Release
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build outputs
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List files
+        run: find dist -type f -exec ls -l {} \;
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Smart Cantonese Translator ${{ needs.windows.outputs.version }}
+          files: |
+            dist/**/SmartCantoneseTranslator-Setup-${{ needs.windows.outputs.version }}.exe
+            dist/**/SmartCantoneseTranslator-${{ needs.windows.outputs.version }}-win64-portable.zip
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            ## Download
+            - **SmartCantoneseTranslator-Setup-${{ needs.windows.outputs.version }}.exe** - installer for Windows 10/11 (64-bit). No admin rights needed.
+            - **SmartCantoneseTranslator-${{ needs.windows.outputs.version }}-win64-portable.zip** - portable version: unzip anywhere and run `SmartCantoneseTranslator.exe`.
+
+            The app is not code-signed yet. If Windows shows "Windows protected your PC", click **More info**, then **Run anyway**.
+            See the [README](https://github.com/${{ github.repository }}#readme) for API keys and Cantonese voices.

@@ -1,0 +1,52 @@
+# Fast compile + unit-test sanity check with the distro Qt (6.4 on Ubuntu 24.04).
+# The shipped Windows app is built by windows.yml.
+
+name: Linux CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & test (Ubuntu 24.04, Qt 6.4)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build g++ \
+            qt6-base-dev qt6-base-dev-tools \
+            qt6-svg-dev qt6-speech-dev qt6-multimedia-dev qt6-declarative-dev \
+            libgl1-mesa-dev libxkbcommon-dev
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DSCT_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build --output-on-failure --timeout 300
+
+      - name: Check install rules
+        run: |
+          cmake --install build --prefix "$RUNNER_TEMP/stage"
+          find "$RUNNER_TEMP/stage" -type f | sort

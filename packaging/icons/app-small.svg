@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>Smart Cantonese Translator (small sizes)</title>
+  <defs>
+    <linearGradient id="tile" x1="24" y1="16" x2="232" y2="240" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF7A45"/>
+      <stop offset="0.55" stop-color="#E5303A"/>
+      <stop offset="1" stop-color="#B0124A"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="248" height="248" rx="48" fill="url(#tile)"/>
+  <path fill="#FFFFFF" d="M68 40h120a40 40 0 0 1 40 40v72a40 40 0 0 1-40 40h-76l-46 36a5 5 0 0 1-8-5l10-31A40 40 0 0 1 28 152V80a40 40 0 0 1 40-40z"/>
+  <g fill="#C8102E"><circle cx="78" cy="116" r="20"/><circle cx="128" cy="116" r="20"/><circle cx="178" cy="116" r="20"/></g>
+</svg>
