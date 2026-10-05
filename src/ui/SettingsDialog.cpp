@@ -893,7 +893,9 @@ void SettingsDialog::apply()
         m_settings->endBatch();
         m_settings->sync();
     }
-    UiPrefs::instance()->setReduceMotion(m_reduceMotion->isChecked());
+    // Only store an explicit choice; until then the Windows animation setting is followed.
+    if (m_reduceMotion->isChecked() != UiPrefs::instance()->reduceMotion())
+        UiPrefs::instance()->setReduceMotion(m_reduceMotion->isChecked());
     m_dirty = false;
     m_apply->setEnabled(false);
 }
